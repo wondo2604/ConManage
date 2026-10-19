@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: minecraft-platform
+    runtime: node
+    plan: free
+    region: singapore # 한국에서 가장 가까운 리전
+    buildCommand: npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: 22.11.0
+      - key: JWT_SECRET
+        generateValue: true
+      - key: DISCORD_WEBHOOK_URL
+        sync: false

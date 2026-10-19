@@ -1,0 +1,560 @@
+@import url('https://fonts.googleapis.com/css2?family=Pretendard:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap');
+
+:root {
+  /* Material 3 Light Theme Palette */
+  --bg-primary: #f8f9fa;               /* 전체 캔버스 배경 (Soft Light Grey) */
+  --bg-secondary: #ffffff;             /* 사이드바, 서브 패널 */
+  --bg-tertiary: #f1f3f5;              /* 톤온톤 컨테이너, 보조 버튼 배경 */
+  --bg-card: #ffffff;                  /* 카드 표면 */
+  --bg-card-hover: #fafafa;
+  --bg-input: #ffffff;
+
+  /* Material 3 Outlines & Borders */
+  --border-color: #e5e7eb;             /* 부드럽고 얇은 경계선 */
+  --border-subtle: #f0f2f5;
+  --border-focus: #8a1818;             /* 포커스시 딥레드 테두리 */
+
+  /* Typography */
+  --text-main: #1f2937;                /* 또렷한 메인 텍스트 */
+  --text-secondary: #4b5563;           /* 보조 설명 텍스트 */
+  --text-muted: #6b7280;               /* 힌트 및 서브라벨 */
+
+  /* Impact Color: Dark Red (Material 3 Deep Red / Crimson) */
+  --primary: #8a1818;                  /* 어두운 빨간색 메인 */
+  --primary-hover: #731414;            /* 호버 */
+  --primary-active: #5c0f0f;           /* 클릭 */
+  --primary-container: #fee2e2;        /* M3 Tonal Container (연한 레드) */
+  --on-primary-container: #7f1d1d;     /* Tonal 텍스트 */
+
+  /* Secondary Tones */
+  --secondary: #4f5b66;
+  --secondary-container: #e8ecf0;
+  --on-secondary-container: #2b333a;
+
+  /* Points & Assets */
+  --point-gold: #b45309;               /* 연방 포인트 텍스트 */
+  --point-gold-bg: #fef3c7;            /* 포인트 배경 칩 */
+  --point-gold-border: #fde68a;
+
+  --point-emerald: #047857;            /* 크레딧 텍스트 */
+  --point-emerald-bg: #d1fae5;         /* 크레딧 배경 칩 */
+  --point-emerald-border: #a7f3d0;
+
+  /* Semantic Status */
+  --danger: #b91c1c;
+  --danger-hover: #991b1b;
+  --danger-container: #fee2e2;
+  --on-danger-container: #7f1d1d;
+
+  --success: #059669;
+  --success-hover: #047857;
+  --success-container: #d1fae5;
+  --on-success-container: #065f46;
+
+  --warning: #d97706;
+  --warning-container: #fef3c7;
+  --on-warning-container: #92400e;
+
+  /* M3 Rounded Shapes */
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+  --radius-pill: 9999px;
+
+  /* M3 Subtle Elevations (자연스러운 그림자) */
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 12px -2px rgba(0, 0, 0, 0.06), 0 2px 4px -2px rgba(0, 0, 0, 0.04);
+  --shadow-lg: 0 10px 24px -4px rgba(0, 0, 0, 0.08), 0 4px 8px -2px rgba(0, 0, 0, 0.03);
+  --shadow-dialog: 0 20px 48px -6px rgba(0, 0, 0, 0.16), 0 8px 16px -4px rgba(0, 0, 0, 0.06);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background-color: var(--bg-primary);
+  color: var(--text-main);
+  min-height: 100vh;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  letter-spacing: -0.2px;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-primary);
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* App Container */
+.app-container {
+  display: flex;
+  min-height: 100vh;
+  background-color: var(--bg-primary);
+}
+
+/* Sidebar (M3 Navigation Rail / Drawer) */
+.sidebar {
+  width: 260px;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  box-shadow: var(--shadow-sm);
+  z-index: 30;
+}
+
+.sidebar-header {
+  padding: 24px 20px;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.server-logo {
+  width: 42px;
+  height: 42px;
+  background: var(--primary);
+  color: #ffffff;
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 20px;
+  box-shadow: 0 4px 10px rgba(138, 24, 24, 0.25);
+}
+
+.server-title {
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--text-main);
+  letter-spacing: -0.3px;
+}
+
+.server-subtitle {
+  font-size: 11px;
+  color: var(--primary);
+  font-weight: 700;
+  text-transform: uppercase;
+  margin-top: 1px;
+}
+
+.nav-menu {
+  flex: 1;
+  padding: 16px 12px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* M3 Pill-shaped Navigation Item */
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 11px 18px;
+  border-radius: var(--radius-pill);
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.nav-item:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-main);
+}
+
+.nav-item.active {
+  background: var(--primary-container);
+  color: var(--on-primary-container);
+  font-weight: 700;
+}
+
+.nav-item.admin-nav {
+  color: #b45309;
+}
+.nav-item.admin-nav:hover {
+  background: #fef3c7;
+}
+.nav-item.admin-nav.active {
+  background: #fef3c7;
+  color: #92400e;
+  font-weight: 700;
+}
+
+/* Main Content Wrapper */
+.main-wrapper {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow-x: hidden;
+  background-color: var(--bg-primary);
+}
+
+/* Top Header */
+.top-header {
+  height: 68px;
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--border-color);
+  padding: 0 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  box-shadow: var(--shadow-sm);
+}
+
+.header-user-info {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+/* M3 Pill Chips */
+.user-badge {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg-tertiary);
+  padding: 5px 14px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-color);
+  color: var(--text-main);
+}
+
+.avatar-circle {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.asset-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 6px 14px;
+  border-radius: var(--radius-pill);
+  transition: transform 0.15s ease;
+}
+
+.asset-pill.point {
+  color: var(--point-gold);
+  background: var(--point-gold-bg);
+  border: 1px solid var(--point-gold-border);
+}
+.asset-pill.credit {
+  color: var(--point-emerald);
+  background: var(--point-emerald-bg);
+  border: 1px solid var(--point-emerald-border);
+}
+
+.content-body {
+  padding: 32px;
+  flex: 1;
+  max-width: 1400px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+/* M3 Cards */
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  margin-bottom: 24px;
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow 0.2s cubic-bezier(0.2, 0, 0, 1), border-color 0.2s ease;
+}
+
+.card:hover {
+  box-shadow: var(--shadow-md);
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.card-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-main);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  letter-spacing: -0.3px;
+}
+
+/* M3 Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 9px 18px;
+  border-radius: var(--radius-pill);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
+  letter-spacing: -0.2px;
+}
+
+/* Primary Filled Button (어두운 빨간색) */
+.btn-primary {
+  background: var(--primary);
+  color: #ffffff;
+  box-shadow: var(--shadow-sm);
+}
+.btn-primary:hover {
+  background: var(--primary-hover);
+  box-shadow: var(--shadow-md);
+}
+.btn-primary:active {
+  background: var(--primary-active);
+}
+
+/* Secondary Outlined/Tonal Button */
+.btn-secondary {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+}
+.btn-secondary:hover {
+  background: #e5e7eb;
+  color: var(--text-main);
+}
+
+.btn-success {
+  background: var(--success);
+  color: white;
+}
+.btn-success:hover {
+  background: var(--success-hover);
+}
+
+.btn-danger {
+  background: var(--danger);
+  color: white;
+}
+.btn-danger:hover {
+  background: var(--danger-hover);
+}
+
+.btn-sm {
+  padding: 6px 14px;
+  font-size: 12px;
+  border-radius: var(--radius-pill);
+}
+
+/* Form Controls (M3 Outlined Style) */
+.form-group {
+  margin-bottom: 18px;
+}
+.form-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 7px;
+}
+.input, .select, .textarea {
+  width: 100%;
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 11px 16px;
+  color: var(--text-main);
+  font-size: 14px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.input:focus, .select:focus, .textarea:focus {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px rgba(138, 24, 24, 0.12);
+}
+.input::placeholder, .textarea::placeholder {
+  color: #9ca3af;
+}
+
+/* M3 Modal Dialog */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 20px;
+}
+
+.modal-content {
+  background: #ffffff;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-xl);
+  width: 100%;
+  max-width: 580px;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: var(--shadow-dialog);
+  padding: 28px;
+  color: var(--text-main);
+}
+
+/* M3 Table */
+.table-container {
+  overflow-x: auto;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+  background: #ffffff;
+}
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 14px;
+}
+.table th {
+  padding: 13px 18px;
+  color: var(--text-secondary);
+  font-weight: 700;
+  border-bottom: 1px solid var(--border-color);
+  background: #f8f9fa;
+}
+.table td {
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-subtle);
+  vertical-align: middle;
+  color: var(--text-main);
+}
+.table tr:last-child td {
+  border-bottom: none;
+}
+.table tr:hover td {
+  background: #fcfcfc;
+}
+
+/* M3 Badges & Chips */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  font-size: 12px;
+  font-weight: 600;
+}
+.badge-pending {
+  background: var(--warning-container);
+  color: var(--on-warning-container);
+}
+.badge-approved, .badge-completed, .badge-delivered {
+  background: var(--success-container);
+  color: var(--on-success-container);
+}
+.badge-rejected, .badge-cancelled {
+  background: var(--danger-container);
+  color: var(--on-danger-container);
+}
+.badge-role {
+  background: #e0e7ff;
+  color: #3730a3;
+  border: 1px solid #c7d2fe;
+}
+
+/* Notice Banner */
+.notice-banner {
+  background: #fff8f8;
+  border: 1px solid #fee2e2;
+  border-left: 4px solid var(--primary);
+  border-radius: var(--radius-md);
+  padding: 16px 20px;
+  margin-bottom: 24px;
+  color: var(--text-main);
+}
+
+/* Grid Layouts */
+.grid-2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 20px;
+}
+.grid-3 {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 20px;
+}
+.grid-4 {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 16px;
+}
+
+.btn-warning {
+  background: #f59e0b;
+  color: #ffffff;
+  border: 1px solid #d97706;
+}
+.btn-warning:hover {
+  background: #d97706;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}

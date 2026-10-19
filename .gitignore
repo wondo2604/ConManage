@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+*/node_modules/
+
+# Production Build
+frontend/dist/
+dist/
+
+# SQLite Database Files (로컬 DB가 리포지토리에 커밋되지 않도록 보호)
+backend/database.sqlite-shm
+backend/database.sqlite-wal
+*.sqlite-shm
+*.sqlite-wal
+
+# Uploaded Media Files
+backend/uploads/*
+!backend/uploads/.gitkeep
+
+# Environment Variables
+.env
+backend/.env
+frontend/.env
+*.env.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS & Editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Zip / 배포 임시 파일
+*.zip
+deploy_package/
+infinityfree_htdocs/
