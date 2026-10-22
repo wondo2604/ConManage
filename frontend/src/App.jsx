@@ -144,7 +144,10 @@ export default function App() {
             return (
               <button
                 key={item.id}
-                onClick={() => setActiveTab(item.id)}
+                onClick={() => {
+                  setActiveTab(item.id);
+                  refreshUser();
+                }}
                 className={`nav-item ${isActive ? 'active' : ''} ${item.isAdmin ? 'admin-nav' : ''}`}
               >
                 <Icon size={18} />

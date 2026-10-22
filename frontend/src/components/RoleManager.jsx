@@ -75,11 +75,12 @@ export default function RoleManager({ user, users, onChanged, refreshKey = 0 }) 
     }
   };
 
-  const handleSave = async () => {
+  const handleSave = async (customForm = null) => {
     if (!selected) return;
+    const payload = customForm || form;
     try {
       setSaving(true);
-      await apiRequest(`/roles/${selected.id}`, { method: 'PUT', body: JSON.stringify(form) });
+      await apiRequest(`/roles/${selected.id}`, { method: 'PUT', body: JSON.stringify(payload) });
       await load();
       onChanged?.();
     } catch (err) {
@@ -87,6 +88,16 @@ export default function RoleManager({ user, users, onChanged, refreshKey = 0 }) 
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleTogglePermission = async (permKey, checked) => {
+    const nextPerms = checked
+      ? [...new Set([...form.permissions, permKey])]
+      : form.permissions.filter(x => x !== permKey);
+    const nextForm = { ...form, permissions: nextPerms };
+    setForm(nextForm);
+    // 권한 체크박스 변경 시 즉시 자동 저장하여 탭 이동 시 유실되지 않도록 처리
+    await handleSave(nextForm);
   };
 
   const handleDelete = async () => {
@@ -133,6 +144,10 @@ export default function RoleManager({ user, users, onChanged, refreshKey = 0 }) 
   // ── 멤버 ──
   const setUserRoles = async (target, roleIds) => {
     try {
+      // 멤버 변경 전에 현재 역할 이름/색상/권한 변경사항이 있다면 먼저 저장
+      if (selected && editable && (form.name !== selected.name || form.color !== selected.color)) {
+        await apiRequest(`/roles/${selected.id}`, { method: 'PUT', body: JSON.stringify(form) });
+      }
       await apiRequest(`/users/${target.id}/roles`, { method: 'PUT', body: JSON.stringify({ role_ids: roleIds }) });
       await load();
       onChanged?.();
@@ -303,10 +318,7 @@ export default function RoleManager({ user, users, onChanged, refreshKey = 0 }) 
                             </div>
                             <input type="checkbox" checked={on} disabled={disabled}
                               style={{ width: 18, height: 18 }}
-                              onChange={(e) => setForm({
-                                ...form,
-                                permissions: e.target.checked ? [...form.permissions, p.key] : form.permissions.filter(x => x !== p.key)
-                              })} />
+                              onChange={(e) => handleTogglePermission(p.key, e.target.checked)} />
                           </label>
                         );
                       })}
@@ -345,12 +357,12 @@ export default function RoleManager({ user, users, onChanged, refreshKey = 0 }) 
                 </div>
               )}
 
-              {editable && panel !== 'members' && (
+              {editable && (
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 18 }}>
                   <button className="btn btn-danger btn-sm" onClick={handleDelete}>
                     <Trash2 size={13} /> 역할 삭제
                   </button>
-                  <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
+                  <button className="btn btn-primary" onClick={() => handleSave()} disabled={saving}>
                     <Save size={14} /> {saving ? '저장 중…' : '변경사항 저장'}
                   </button>
                 </div>

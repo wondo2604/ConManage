@@ -41,6 +41,253 @@ export const ALL_PERMISSIONS = PERMISSION_CATALOG.map(p => p.key);
 // 하위 호환용 별칭
 export const ALL_ROLES = ALL_PERMISSIONS;
 
+// 개별 디스코드 웹훅 이벤트 카탈로그 (지급 기록, 납품, 퀘스트, 알바, 상점, 크레딧, 일정, 시즌, 계정/역할 등 26종)
+export const WEBHOOK_EVENT_CATALOG = [
+  // 1. 지급 및 재화 입출금 기록 (지급 기록 / 원장 로그)
+  {
+    event_key: 'asset_payout',
+    name: '통합 포인트·크레딧 지급(+) 원장 기록',
+    category: '지급 및 재화 기록',
+    description: '플레이어에게 연방 포인트(P) 또는 크레딧(C)이 지급(입금 +)될 때마다 원장 번호, 대상자, 지급량, 지급 전→후 잔액, 사유, 처리자를 전송합니다.',
+    default_enabled: 1,
+    default_mention: 'none',
+    default_color: '#10b981'
+  },
+  {
+    event_key: 'asset_deduct',
+    name: '통합 포인트·크레딧 차감/사용(-) 원장 기록',
+    category: '지급 및 재화 기록',
+    description: '플레이어의 연방 포인트(P) 또는 크레딧(C)이 차감·소비(출금 -)될 때마다 원장 번호, 대상자, 차감량, 잔액 변화, 사유, 처리자를 전송합니다.',
+    default_enabled: 1,
+    default_mention: 'none',
+    default_color: '#ef4444'
+  },
+  {
+    event_key: 'manual_adjust',
+    name: '관리자 수동 재화 지급·차감 및 수기 정산',
+    category: '지급 및 재화 기록',
+    description: '관리자·데이터 관리자가 플레이어의 포인트/크레딧 수치를 직접 조정하거나 수동 입출금 내역을 정산 기록했을 때 전송합니다.',
+    default_enabled: 1,
+    default_mention: 'none',
+    default_color: '#f59e0b'
+  },
+  {
+    event_key: 'supply_reward',
+    name: '물자 납품 승인 및 보상 지급 기록',
+    category: '지급 및 재화 기록',
+    description: '물자 납품(지정/자율)이 승인되어 포인트·크레딧 보상이 지급되었을 때(사후 지급 수치 정정 포함) 전송합니다.',
+    default_enabled: 1,
+    default_mention: 'none',
+    default_color: '#3b82f6'
+  },
+  {
+    event_key: 'quest_reward',
+    name: '퀘스트 완수 승인 및 보상 지급 기록',
+    category: '지급 및 재화 기록',
+    description: '공통 퀘스트 인증 제출이 승인되어 보상 포인트·크레딧이 지급되었을 때 전송합니다.',
+    default_enabled: 1,
+    default_mention: 'none',
+    default_color: '#8b5cf6'
+  },
+  {
+    event_key: 'job_payout',
+    name: '단기 알바 완료 승인 및 보수·포인트 지급 기록',
+    category: '지급 및 재화 기록',
+    description: '단기 알바 작업이 최종 승인되어 근로자에게 크레딧 보수와 연방 포인트가 지급되었을 때 전송합니다.',
+    default_enabled: 1,
+    default_mention: 'none',
+    default_color: '#06b6d4'
+  },
+  {
+    event_key: 'ranking_bulk_adjust',
+    name: '전체 플레이어 일괄 포인트·크레딧 지급/조정',
+    category: '지급 및 재화 기록',
+    description: '랭킹 관리자가 전체 플레이어를 대상으로 포인트·보너스·크레딧을 일괄 지급하거나 조정했을 때 전송합니다.',
+    default_enabled: 1,
+    default_mention: 'none',
+    default_color: '#ec4899'
+  },
+
+  // 2. 크레딧 충전 & 환전 (금융 창구)
+  {
+    event_key: 'credit_charge_request',
+    name: '크레딧 충전 신청 접수',
+    category: '크레딧 충전 & 환전',
+    description: '플레이어가 인게임 송금 증빙과 함께 크레딧 충전을 신청했을 때 전송합니다.',
+    default_enabled: 1,
+    default_mention: 'none',
+    default_color: '#38bdf8'
+  },
+  {
+    event_key: 'credit_charge_review',
+    name: '크레딧 충전 승인(지급) 및 반려 처리',
+    category: '크레딧 충전 & 환전',
+    description: '크레딧 충전 신청이 승인되어 크레딧·보너스 포인트가 지급되거나 반려(거절)되었을 때 전송합니다.',
+    default_enabled: 1,
+    default_mention: 'none',
+    default_color: '#10b981'
+  },
+  {
+    event_key: 'credit_exchange_request',
+    name: '크레딧 환전(출금) 신청 접수',
+    category: '크레딧 충전 & 환전',
+    description: '플레이어가 보유 크레딧을 인게임 화폐로 환전(출금) 신청했을 때 전송합니다.',
+    default_enabled: 1,
+    default_mention: 'none',
+    default_color: '#f97316'
+  },
+  {
+    event_key: 'credit_exchange_review',
+    name: '크레딧 환전 지급 완료 및 반려(환불) 처리',
+    category: '크레딧 충전 & 환전',
+    description: '크레딧 환전 요청이 지급 완료 처리되거나 거절(크레딧 환불)되었을 때 전송합니다.',
+    default_enabled: 1,
+    default_mention: 'none',
+    default_color: '#14b8a6'
+  },
+
+  // 3. 물자 납품 & 포인트 상점
+  {
+    event_key: 'supply_request',
+    name: '신규 물자 납품 신청 접수',
+    category: '물자 납품 & 상점',
+    description: '플레이어가 지정 물자 또는 자율 품목 납품을 신청했을 때 품목·수량·상자 위치를 전송합니다.',
+    default_enabled: 1,
+    default_mention: 'none',
+    default_color: '#2563eb'
+  },
+  {
+    event_key: 'supply_rejected',
+    name: '물자 납품 반려(거절) 처리',
+    category: '물자 납품 & 상점',
+    description: '물자 납품 신청이 반려(거절)되었을 때 사유와 함께 전송합니다.',
+    default_enabled: 1,
+    default_mention: 'none',
+    default_color: '#dc2626'
+  },
+  {
+    event_key: 'supply_item_created',
+    name: '신규 납품 대상 품목 등록',
+    category: '물자 납품 & 상점',
+    description: '납품 관리자가 새로운 납품 물자 품목과 단가(포인트/크레딧)를 등록했을 때 전송합니다.',
+    default_enabled: 1,
+    default_mention: 'none',
+    default_color: '#60a5fa'
+  },
+  {
+    event_key: 'shop_purchase',
+    name: '포인트 상점 아이템 구매 신청',
+    category: '물자 납품 & 상점',
+    description: '플레이어가 연방 포인트로 상점 아이템을 구매 신청했을 때 전송합니다.',
+    default_enabled: 1,
+    default_mention: 'none',
+    default_color: '#a855f7'
+  },
+  {
+    event_key: 'shop_delivery',
+    name: '포인트 상점 상품 지급 완료 및 주문 취소(환불)',
+    category: '물자 납품 & 상점',
+    description: '상점 주문 아이템이 인게임 지급 완료 처리되거나 주문 취소(포인트 환불)되었을 때 전송합니다.',
+    default_enabled: 1,
+    default_mention: 'none',
+    default_color: '#22c55e'
+  },
+
+  // 4. 퀘스트 & 단기 알바
+  {
+    event_key: 'quest',
+    name: '신규 공통 퀘스트 등록',
+    category: '퀘스트 & 단기 알바',
+    description: '새로운 공통 퀘스트가 등록되었을 때 목표 품목과 보상 정보를 전송합니다.',
+    default_enabled: 1,
+    default_mention: 'none',
+    default_color: '#f59e0b'
+  },
+  {
+    event_key: 'quest_submission',
+    name: '퀘스트 완료 인증 제출 접수',
+    category: '퀘스트 & 단기 알바',
+    description: '플레이어가 퀘스트 완료 증빙을 제출했을 때 전송합니다.',
+    default_enabled: 1,
+    default_mention: 'none',
+    default_color: '#fbbf24'
+  },
+  {
+    event_key: 'quest_rejected',
+    name: '퀘스트 완료 인증 반려(거절) 처리',
+    category: '퀘스트 & 단기 알바',
+    description: '퀘스트 완료 인증 제출이 반려(거절)되었을 때 사유와 함께 전송합니다.',
+    default_enabled: 1,
+    default_mention: 'none',
+    default_color: '#ef4444'
+  },
+  {
+    event_key: 'part_time_job',
+    name: '단기 알바 구인 승인 및 공개 모집',
+    category: '퀘스트 & 단기 알바',
+    description: '기업 관리자가 단기 알바 구인을 승인하여 공개 모집이 시작될 때 전송합니다.',
+    default_enabled: 1,
+    default_mention: 'none',
+    default_color: '#3b82f6'
+  },
+  {
+    event_key: 'job_request',
+    name: '단기 알바 구인 등록 신청 (승인 대기)',
+    category: '퀘스트 & 단기 알바',
+    description: '사업가가 새로운 단기 알바 구인을 등록 신청했을 때 전송합니다.',
+    default_enabled: 1,
+    default_mention: 'none',
+    default_color: '#64748b'
+  },
+  {
+    event_key: 'job_progress',
+    name: '단기 알바 지원 채용 및 작업 완료 보고',
+    category: '퀘스트 & 단기 알바',
+    description: '구직자가 알바에 지원·채용되었거나 고용주/구직자 작업 완료가 보고되었을 때 전송합니다.',
+    default_enabled: 1,
+    default_mention: 'none',
+    default_color: '#0ea5e9'
+  },
+
+  // 5. 일정 · 시즌 · 계정/역할 관리
+  {
+    event_key: 'schedule',
+    name: '캘린더 신규 일정 등록',
+    category: '일정 · 시즌 · 계정 관리',
+    description: '캘린더에 새로운 국가 일정이 등록되었을 때 전송합니다.',
+    default_enabled: 1,
+    default_mention: 'everyone',
+    default_color: '#10b981'
+  },
+  {
+    event_key: 'season_change',
+    name: '시즌 시작·활성화 및 랭킹/재화 초기화',
+    category: '일정 · 시즌 · 계정 관리',
+    description: '새 시즌 생성·활성화 또는 시즌/전체 랭킹·재화 초기화가 실행되었을 때 전송합니다.',
+    default_enabled: 1,
+    default_mention: 'none',
+    default_color: '#e11d48'
+  },
+  {
+    event_key: 'user_register',
+    name: '신규 회원가입 신청 및 가입 승인·거절',
+    category: '일정 · 시즌 · 계정 관리',
+    description: '신규 플레이어가 가입을 신청하거나 관리자가 가입을 승인/거절했을 때 전송합니다.',
+    default_enabled: 1,
+    default_mention: 'none',
+    default_color: '#6366f1'
+  },
+  {
+    event_key: 'role_change',
+    name: '개인별 역할(랭크) 부여 및 역할 설정 변경',
+    category: '일정 · 시즌 · 계정 관리',
+    description: '플레이어에게 디스코드 역할이 부여/해제되거나 역할 및 권한 구성이 변경되었을 때 전송합니다.',
+    default_enabled: 1,
+    default_mention: 'none',
+    default_color: '#8b5cf6'
+  }
+];
+
 export function initDatabase() {
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
@@ -301,6 +548,17 @@ export function initDatabase() {
       FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
       FOREIGN KEY(role_id) REFERENCES roles(id) ON DELETE CASCADE
     );
+
+    -- 이벤트별 개별 디스코드 웹훅 설정 테이블
+    CREATE TABLE IF NOT EXISTS webhook_configs (
+      event_key TEXT PRIMARY KEY,
+      enabled INTEGER DEFAULT 1,
+      webhook_url TEXT DEFAULT '',
+      mention_type TEXT DEFAULT 'none',
+      custom_mention TEXT DEFAULT '',
+      embed_color TEXT DEFAULT '#3b82f6',
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
   `);
 
   // 마이그레이션 확인
@@ -426,10 +684,9 @@ export function initDatabase() {
 
   migrateLegacyUserPermissions();
 
-  // 최초 1회: 역할 테이블이 비어 있을 때 기본 디스코드 스타일 역할(개인 랭크 & 직책) 프리셋 생성
-  const rolesSeeded = db.prepare(`SELECT value FROM settings WHERE key = 'roles_seeded'`).get();
+  // 역할 테이블이 비어 있을 때 기본 디스코드 스타일 역할(개인 랭크 & 직책) 프리셋 생성
   const roleCount = db.prepare('SELECT COUNT(*) as cnt FROM roles').get()?.cnt || 0;
-  if (!rolesSeeded && roleCount === 0) {
+  if (roleCount === 0) {
     const defaultRoles = [
       // 아래에서 위 순서로 position 1..N 부여 (뒤에 있을수록 높은 서열)
       { name: '일반 시민', color: '#64748b', permissions: [] },
@@ -445,6 +702,20 @@ export function initDatabase() {
       insertDefaultRole.run(r.name, r.color, idx + 1, JSON.stringify(r.permissions));
     });
     db.prepare(`INSERT OR REPLACE INTO settings (key, value) VALUES ('roles_seeded', '1')`).run();
+  }
+
+  // 역할 이름이 권한명과 일치하는데 permissions 배열이 비어있는 경우 자동 보정 (예: '사업가' 역할을 만들고 권한 체크를 누락한 경우)
+  const existingRoles = db.prepare('SELECT id, name, permissions FROM roles').all();
+  const updateRolePerms = db.prepare('UPDATE roles SET permissions = ? WHERE id = ?');
+  for (const r of existingRoles) {
+    const currentPerms = parseJsonArray(r.permissions);
+    const matchedPerms = ALL_PERMISSIONS.filter(p => r.name === p || r.name.includes(p));
+    if (matchedPerms.length > 0) {
+      const merged = [...new Set([...currentPerms, ...matchedPerms])];
+      if (merged.length !== currentPerms.length) {
+        updateRolePerms.run(JSON.stringify(merged), r.id);
+      }
+    }
   }
 
   // 초기 기본 활성 시즌 생성
@@ -463,6 +734,15 @@ export function initDatabase() {
       INSERT INTO notices (category, title, content)
       VALUES ('supply', '납품 안내 사항', '1. 상자 위치를 정확히 기재해 주세요.\n2. 상자 내부 인벤토리가 잘 보이는 스크린샷을 첨부하세요.\n3. 목록에 없는 아이템도 [자율/직접 입력 납품 신청]으로 여러 품목과 수량을 직접 입력해 납품할 수 있습니다.')
     `).run();
+  }
+
+  // 이벤트별 개별 디스코드 웹훅 기본 설정 시딩 (이미 설정된 값은 유지)
+  const insertWebhookCfg = db.prepare(`
+    INSERT OR IGNORE INTO webhook_configs (event_key, enabled, webhook_url, mention_type, custom_mention, embed_color)
+    VALUES (?, ?, '', ?, '', ?)
+  `);
+  for (const item of WEBHOOK_EVENT_CATALOG) {
+    insertWebhookCfg.run(item.event_key, item.default_enabled ?? 1, item.default_mention || 'none', item.default_color || '#3b82f6');
   }
 }
 
@@ -504,7 +784,24 @@ export function getUserRoles(userId) {
 export function getUserAccess(userId) {
   const roles = getUserRoles(userId);
   const perms = new Set();
-  roles.forEach(r => r.permissions.forEach(p => perms.add(p)));
+  roles.forEach(r => {
+    r.permissions.forEach(p => perms.add(p));
+    // 역할 이름 자체가 권한명(예: '사업가', '기업 관리' 등)과 같거나 포함하면 해당 권한도 자동 인정
+    ALL_PERMISSIONS.forEach(p => {
+      if (r.name === p || r.name?.includes(p)) {
+        perms.add(p);
+      }
+    });
+  });
+
+  // 혹시 legacy users.roles 컬럼에 남아있는 권한 문자열이 있다면 함께 합산
+  try {
+    const legacyRow = db.prepare('SELECT roles FROM users WHERE id = ?').get(userId);
+    if (legacyRow?.roles) {
+      sanitizePermissions(parseJsonArray(legacyRow.roles)).forEach(p => perms.add(p));
+    }
+  } catch (_) {}
+
   return {
     roles: roles.map(({ id, name, color, position }) => ({ id, name, color, position })),
     permissions: [...perms],
@@ -547,6 +844,12 @@ export function migrateLegacyUserPermissions() {
   }
 }
 
+let onAssetTransactionRecorded = null;
+
+export function setAssetTransactionHook(fn) {
+  onAssetTransactionRecorded = fn;
+}
+
 // 연방 포인트 / 크레딧 입출금 상세 원장 기록 헬퍼 함수
 export function recordAssetTransaction({
   userId,
@@ -558,7 +861,8 @@ export function recordAssetTransaction({
   referenceId = null,
   actor = null, // { id, username, nickname }
   balanceBefore = null,
-  balanceAfter = null
+  balanceAfter = null,
+  skipWebhook = false
 }) {
   try {
     const numAmount = Number(amount);
@@ -575,7 +879,7 @@ export function recordAssetTransaction({
     const actorId = actor?.id || null;
     const actorName = actor ? `${actor.nickname || actor.username} (@${actor.username})` : '시스템';
 
-    db.prepare(`
+    const result = db.prepare(`
       INSERT INTO asset_transactions (
         user_id, username, nickname, asset_type, tx_type, category,
         amount, balance_before, balance_after, description,
@@ -597,6 +901,29 @@ export function recordAssetTransaction({
       actorId,
       actorName
     );
+
+    if (!skipWebhook && typeof onAssetTransactionRecorded === 'function') {
+      try {
+        onAssetTransactionRecorded({
+          id: result.lastInsertRowid,
+          user_id: targetUser.id,
+          username: targetUser.username,
+          nickname: targetUser.nickname || targetUser.username,
+          asset_type: assetType,
+          tx_type: txType,
+          category,
+          amount: Math.abs(numAmount),
+          balance_before: beforeVal,
+          balance_after: afterVal,
+          description,
+          reference_type: referenceType || '',
+          reference_id: referenceId || null,
+          actor_name: actorName
+        });
+      } catch (hookErr) {
+        console.error('[AssetTransactionHook Error]', hookErr.message);
+      }
+    }
   } catch (err) {
     console.error('[recordAssetTransaction Error]', err);
   }

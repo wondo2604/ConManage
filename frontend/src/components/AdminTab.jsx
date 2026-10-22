@@ -31,6 +31,7 @@ import {
   Edit2
 } from 'lucide-react';
 import RoleManager from './RoleManager';
+import WebhookManager from './WebhookManager';
 
 export default function AdminTab({ user, refreshUser, branding, refreshBranding }) {
   const [users, setUsers] = useState([]);
@@ -736,35 +737,8 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
         </div>
       </div>
 
-      {/* 3. 디스코드 웹훅 설정 카드 (슈퍼관리자) */}
-      {user.is_admin && (
-        <div className="card" style={{ marginBottom: 28 }}>
-          <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Settings size={18} color="#60a5fa" />
-            <span>시스템 전역 디스코드 웹훅 연동</span>
-          </h3>
-          <p style={{ fontSize: 13, color: '#94a3b8', marginBottom: 16 }}>
-            단기 알바(멘션X), 캘린더(@everyone 멘션), 퀘스트(멘션X) 및 공지사항의 기본 알림 채널로 사용됩니다.
-          </p>
-
-          <form onSubmit={handleSaveWebhook} style={{ display: 'flex', gap: 10 }}>
-            <input
-              type="url"
-              className="input"
-              placeholder="https://discord.com/api/webhooks/..."
-              value={settings.discord_webhook_url || ''}
-              onChange={(e) => setSettings({ ...settings, discord_webhook_url: e.target.value })}
-              style={{ flex: 1 }}
-            />
-            <button type="submit" className="btn btn-primary" style={{ whiteSpace: 'nowrap' }}>
-              기본 웹훅 저장
-            </button>
-            <button type="button" className="btn btn-secondary" onClick={handleTestWebhook} style={{ whiteSpace: 'nowrap' }}>
-              <Send size={14} /> 기본 웹훅 테스트
-            </button>
-          </form>
-        </div>
-      )}
+      {/* 3. 디스코드 웹훅 통합 & 개별 상세 설정 센터 (지급 기록 포함 26종 전체) */}
+      {user.is_admin && <WebhookManager />}
 
       {/* 💾 4. 데이터베이스 백업 & 복원 (JSON) - 슈퍼관리자 전용 */}
       {user.is_admin && (

@@ -9,10 +9,13 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
   db, initDatabase, recordAssetTransaction,
-  PERMISSION_CATALOG, sanitizePermissions, normalizeRolePositions,
+  PERMISSION_CATALOG, WEBHOOK_EVENT_CATALOG, sanitizePermissions, normalizeRolePositions,
   getUserAccess, migrateLegacyUserPermissions
 } from './db.js';
-import { sendDiscordWebhook, sendNoticeDiscordWebhook, getGlobalWebhookUrl } from './discord.js';
+import {
+  sendDiscordWebhook, sendNoticeDiscordWebhook, getGlobalWebhookUrl,
+  getAllWebhookConfigs, sendTestEventWebhook
+} from './discord.js';
 import zlib from 'node:zlib';
 
 dotenv.config();
@@ -184,6 +187,15 @@ app.post('/api/auth/register', (req, res) => {
     VALUES (?, ?, ?, 0, 0, 0, 0, '[]', 'pending')
   `).run(username, hash, nickname || username);
 
+  sendDiscordWebhook('user_register', {
+    action_title: '신규 회원가입 신청 접수',
+    username,
+    nickname: nickname || username,
+    status_label: '가입 승인 대기 중 (pending)',
+    description: `'${nickname || username}' (@${username}) 플레이어가 회원가입을 신청했습니다.`,
+    actor_name: `${nickname || username} (@${username})`
+  });
+
   res.json({
     message: '회원가입 신청이 성공적으로 접수되었습니다! "계정 관리" 관리자의 승인 후 로그인할 수 있습니다.',
     pending: true
@@ -226,7 +238,20 @@ app.put('/api/users/:id/status', authenticateToken, (req, res) => {
     return res.status(400).json({ error: '올바른 상태(approved/rejected)를 지정하세요.' });
   }
 
+  const targetUser = db.prepare('SELECT id, username, nickname FROM users WHERE id = ?').get(req.params.id);
   db.prepare('UPDATE users SET status = ? WHERE id = ?').run(status, req.params.id);
+
+  if (targetUser) {
+    sendDiscordWebhook('user_register', {
+      action_title: status === 'approved' ? '회원가입 승인 완료' : '회원가입 거절 처리',
+      username: targetUser.username,
+      nickname: targetUser.nickname || targetUser.username,
+      status_label: status === 'approved' ? '승인 완료 (approved)' : '거절됨 (rejected)',
+      description: `'${targetUser.nickname || targetUser.username}' (@${targetUser.username}) 계정이 ${status === 'approved' ? '승인' : '거절'}되었습니다.`,
+      actor_name: `${req.user.nickname || req.user.username} (@${req.user.username})`
+    });
+  }
+
   res.json({ message: `계정이 ${status === 'approved' ? '승인' : '거절'}되었습니다.` });
 });
 
@@ -356,7 +381,11 @@ app.post('/api/roles', authenticateToken, (req, res) => {
   const name = String(req.body.name || '').trim();
   if (!name) return res.status(400).json({ error: '역할 이름을 입력해주세요.' });
 
-  const perms = sanitizePermissions(req.body.permissions);
+  let perms = sanitizePermissions(req.body.permissions);
+  if (perms.length === 0) {
+    const matched = PERMISSION_CATALOG.map(p => p.key).filter(k => (name === k || name.includes(k)) && (req.user.is_admin === 1 || req.user.roleList.includes(k)));
+    if (matched.length > 0) perms = matched;
+  }
   const forbidden = findForbiddenPermissions(req.user, perms);
   if (forbidden.length) return res.status(403).json({ error: `본인이 가지지 않은 권한은 부여할 수 없습니다: ${forbidden.join(', ')}` });
 
@@ -367,6 +396,13 @@ app.post('/api/roles', authenticateToken, (req, res) => {
     const result = db.prepare('INSERT INTO roles (name, color, position, permissions) VALUES (?, ?, 1, ?)')
       .run(name, req.body.color || '#99aab5', JSON.stringify(perms));
     db.exec('COMMIT;');
+    sendDiscordWebhook('role_change', {
+      action_title: '신규 역할 생성',
+      target_name: name,
+      detail: perms.length ? `포함 권한: ${perms.join(', ')}` : '권한 없음 (표시용 역할)',
+      description: `'${name}' 역할이 새로 생성되었습니다.`,
+      actor_name: `${req.user.nickname || req.user.username} (@${req.user.username})`
+    });
     res.json({ message: `'${name}' 역할이 생성되었습니다.`, id: result.lastInsertRowid });
   } catch (err) {
     db.exec('ROLLBACK;');
@@ -417,6 +453,11 @@ app.put('/api/roles/:id', authenticateToken, (req, res) => {
   let perms = role.permissions;
   if (req.body.permissions !== undefined) {
     perms = sanitizePermissions(req.body.permissions);
+    // 역할 이름을 바꿨는데 권한이 비어있고 이름이 권한명과 일치하면 자동 포함
+    if (perms.length === 0 && name !== role.name) {
+      const matched = PERMISSION_CATALOG.map(p => p.key).filter(k => (name === k || name.includes(k)) && (req.user.is_admin === 1 || req.user.roleList.includes(k)));
+      if (matched.length > 0) perms = matched;
+    }
     // 바뀌는 권한(추가·제거) 모두 본인이 가진 권한이어야 함
     const changed = [...perms.filter(p => !role.permissions.includes(p)), ...role.permissions.filter(p => !perms.includes(p))];
     const forbidden = findForbiddenPermissions(req.user, changed);
@@ -425,6 +466,13 @@ app.put('/api/roles/:id', authenticateToken, (req, res) => {
 
   db.prepare('UPDATE roles SET name = ?, color = ?, permissions = ? WHERE id = ?')
     .run(name, req.body.color || role.color, JSON.stringify(perms), role.id);
+  sendDiscordWebhook('role_change', {
+    action_title: '역할 설정 및 권한 수정',
+    target_name: name,
+    detail: perms.length ? `포함 권한: ${perms.join(', ')}` : '권한 없음',
+    description: `'${name}' 역할의 이름/색상/권한 설정이 수정되었습니다.`,
+    actor_name: `${req.user.nickname || req.user.username} (@${req.user.username})`
+  });
   res.json({ message: `'${name}' 역할이 저장되었습니다.` });
 });
 
@@ -436,13 +484,20 @@ app.delete('/api/roles/:id', authenticateToken, (req, res) => {
 
   db.prepare('DELETE FROM roles WHERE id = ?').run(role.id);
   normalizeRolePositions();
+  sendDiscordWebhook('role_change', {
+    action_title: '역할 삭제',
+    target_name: role.name,
+    detail: '역할 삭제 완료',
+    description: `'${role.name}' 역할이 삭제되었습니다.`,
+    actor_name: `${req.user.nickname || req.user.username} (@${req.user.username})`
+  });
   res.json({ message: `'${role.name}' 역할이 삭제되었습니다.` });
 });
 
 // 사용자에게 역할 부여/해제 (role_ids 전체 목록으로 교체)
 app.put('/api/users/:id/roles', authenticateToken, (req, res) => {
   if (!canManageRoles(req.user)) return res.status(403).json({ error: "'역할 관리' 권한이 필요합니다." });
-  const target = db.prepare('SELECT id, is_admin FROM users WHERE id = ?').get(req.params.id);
+  const target = db.prepare('SELECT id, username, nickname, is_admin FROM users WHERE id = ?').get(req.params.id);
   if (!target) return res.status(404).json({ error: '유저를 찾을 수 없습니다.' });
   if (target.is_admin === 1 && req.user.is_admin !== 1) {
     return res.status(403).json({ error: '슈퍼관리자의 역할은 슈퍼관리자만 변경할 수 있습니다.' });
@@ -472,6 +527,18 @@ app.put('/api/users/:id/roles', authenticateToken, (req, res) => {
     db.exec('ROLLBACK;');
     return res.status(500).json({ error: err.message });
   }
+
+  if (toAdd.length > 0 || toRemove.length > 0) {
+    const assignedNames = getUserAccess(target.id).roles.map(r => r.name);
+    sendDiscordWebhook('role_change', {
+      action_title: '플레이어 역할 부여/해제',
+      target_name: `${target.nickname || target.username} (@${target.username})`,
+      detail: assignedNames.length ? `현재 역할: ${assignedNames.join(', ')}` : '부여된 역할 없음',
+      description: `'${target.nickname || target.username}' 플레이어의 개인별 역할이 업데이트되었습니다.`,
+      actor_name: `${req.user.nickname || req.user.username} (@${req.user.username})`
+    });
+  }
+
   res.json({ message: '사용자 역할이 업데이트되었습니다.' });
 });
 
@@ -530,6 +597,20 @@ app.put('/api/users/:id/assets', authenticateToken, (req, res) => {
       actor: req.user,
       balanceBefore: targetUser.credits || 0,
       balanceAfter: newCredits
+    });
+  }
+
+  if (pointDiff !== 0 || creditDiff !== 0) {
+    sendDiscordWebhook('manual_adjust', {
+      target_name: targetUser.nickname || targetUser.username,
+      target_username: targetUser.username,
+      point_diff_text: pointDiff === 0 ? '변동 없음' : `${pointDiff > 0 ? '+' : ''}${pointDiff.toLocaleString()} P`,
+      credit_diff_text: creditDiff === 0 ? '변동 없음' : `${creditDiff > 0 ? '+' : ''}${creditDiff.toLocaleString()} C`,
+      after_points: newPoints,
+      after_credits: newCredits,
+      category: '관리자 수동 조정',
+      reason: reason || '관리자 패널에서 재화 수치 직접 조정',
+      actor_name: `${req.user.nickname || req.user.username} (@${req.user.username})`
     });
   }
 
@@ -714,6 +795,16 @@ app.post('/api/supplies', authenticateToken, requireRole(['납품 등록', '납�
     VALUES (?, ?, ?, ?, ?, ?)
   `).run(name, unit || '개', Number(points_per_unit) || 0, Number(credits_per_unit) || 0, description || '', req.user.id);
 
+  sendDiscordWebhook('supply_item_created', {
+    id: result.lastInsertRowid,
+    name,
+    unit: unit || '개',
+    points_per_unit: Number(points_per_unit) || 0,
+    credits_per_unit: Number(credits_per_unit) || 0,
+    description: description || '',
+    actor_name: `${req.user.nickname || req.user.username} (@${req.user.username})`
+  });
+
   res.json({ message: '납품 상품이 등록되었습니다.', id: result.lastInsertRowid });
 });
 
@@ -821,16 +912,41 @@ app.post('/api/supplies/requests', authenticateToken, upload.single('proof_image
       proof_image
     );
 
+    sendDiscordWebhook('supply_request', {
+      id: result.lastInsertRowid,
+      is_custom: true,
+      supply_name: summaryName,
+      amount: totalAmount,
+      unit: mainUnit,
+      chest_location,
+      notes: notes || '',
+      user_name: req.user.nickname || req.user.username,
+      username: req.user.username
+    });
+
     return res.json({ message: '자율 직접 입력 납품 신청이 접수되었습니다. 관리자가 확인 후 보상을 책정하여 지급합니다.', id: result.lastInsertRowid });
   } else {
     if (!supply_id || !amount) {
       return res.status(400).json({ error: '모든 필수 항목(물품, 수량, 상자 위치)을 입력해주세요.' });
     }
 
+    const supplyInfo = db.prepare('SELECT name, unit FROM supplies WHERE id = ?').get(Number(supply_id));
     const result = db.prepare(`
       INSERT INTO supply_requests (supply_id, is_custom, user_id, amount, chest_location, notes, proof_image, status)
       VALUES (?, 0, ?, ?, ?, ?, ?, 'pending')
     `).run(Number(supply_id), req.user.id, Number(amount), chest_location, notes || '', proof_image);
+
+    sendDiscordWebhook('supply_request', {
+      id: result.lastInsertRowid,
+      is_custom: false,
+      supply_name: supplyInfo?.name || '지정 품목',
+      amount: Number(amount),
+      unit: supplyInfo?.unit || '개',
+      chest_location,
+      notes: notes || '',
+      user_name: req.user.nickname || req.user.username,
+      username: req.user.username
+    });
 
     return res.json({ message: '납품 신청이 접수되었습니다.', id: result.lastInsertRowid });
   }
@@ -847,9 +963,11 @@ app.put('/api/supplies/requests/:id/review', authenticateToken, requireRole('납
            COALESCE(s.name, sr.custom_item_name, '자율 납품') as supply_name,
            COALESCE(s.unit, sr.custom_unit, '개') as unit,
            COALESCE(s.points_per_unit, 0) as points_per_unit,
-           COALESCE(s.credits_per_unit, 0) as credits_per_unit
+           COALESCE(s.credits_per_unit, 0) as credits_per_unit,
+           u.username, u.nickname
     FROM supply_requests sr
     LEFT JOIN supplies s ON sr.supply_id = s.id
+    LEFT JOIN users u ON sr.user_id = u.id
     WHERE sr.id = ?
   `).get(req.params.id);
 
@@ -925,6 +1043,33 @@ app.put('/api/supplies/requests/:id/review', authenticateToken, requireRole('납
     WHERE id = ?
   `).run(status, admin_comment || '', earnedPoints, earnedCredits, req.user.id, req.params.id);
 
+  if (status === 'approved') {
+    sendDiscordWebhook('supply_reward', {
+      request_id: reqItem.id,
+      user_name: reqItem.nickname || reqItem.username,
+      username: reqItem.username,
+      supply_name: reqItem.supply_name,
+      amount: reqItem.amount,
+      unit: reqItem.unit,
+      chest_location: reqItem.chest_location,
+      points_earned: earnedPoints,
+      credits_earned: earnedCredits,
+      admin_comment: admin_comment || '',
+      reviewer_name: `${req.user.nickname || req.user.username} (@${req.user.username})`
+    });
+  } else {
+    sendDiscordWebhook('supply_rejected', {
+      request_id: reqItem.id,
+      user_name: reqItem.nickname || reqItem.username,
+      username: reqItem.username,
+      supply_name: reqItem.supply_name,
+      amount: reqItem.amount,
+      unit: reqItem.unit,
+      admin_comment: admin_comment || '',
+      reviewer_name: `${req.user.nickname || req.user.username} (@${req.user.username})`
+    });
+  }
+
   res.json({ message: `납품 신청이 ${status === 'approved' ? `승인 (+${earnedPoints}P, +${earnedCredits.toLocaleString()}C)` : '거절'}되었습니다.` });
 });
 
@@ -996,6 +1141,21 @@ app.put('/api/supplies/requests/:id/edit', authenticateToken, requireRole('납�
     admin_comment ?? reqItem.admin_comment,
     req.params.id
   );
+
+  const reqUser = db.prepare('SELECT username, nickname FROM users WHERE id = ?').get(reqItem.user_id);
+  const supplyRow = reqItem.supply_id ? db.prepare('SELECT name, unit FROM supplies WHERE id = ?').get(reqItem.supply_id) : null;
+  sendDiscordWebhook('supply_reward', {
+    request_id: reqItem.id,
+    user_name: reqUser ? (reqUser.nickname || reqUser.username) : `#${reqItem.user_id}`,
+    username: reqUser?.username || '',
+    supply_name: custom_item_name || reqItem.custom_item_name || supplyRow?.name || '지정 품목',
+    amount: amount !== undefined ? Number(amount) : reqItem.amount,
+    unit: supplyRow?.unit || '개',
+    points_earned: newPoints,
+    credits_earned: newCredits,
+    admin_comment: `[사후 수치 수정] ${admin_comment ?? reqItem.admin_comment ?? ''}`.trim(),
+    reviewer_name: `${req.user.nickname || req.user.username} (@${req.user.username})`
+  });
 
   res.json({ message: '납품 기록 및 지급 수치가 수정되었습니다.' });
 });
@@ -1199,7 +1359,8 @@ app.post('/api/ranking/reset', authenticateToken, requireRole(['랭킹 관리자
           description: reason ? `[초기화] ${reason}` : `랭킹 관리자에 의한 연방 포인트 일괄 초기화`,
           actor: req.user,
           balanceBefore: u.points,
-          balanceAfter: 0
+          balanceAfter: 0,
+          skipWebhook: true
         });
       }
       db.prepare('UPDATE users SET points = 0').run();
@@ -1217,7 +1378,8 @@ app.post('/api/ranking/reset', authenticateToken, requireRole(['랭킹 관리자
           description: reason ? `[초기화] ${reason}` : `랭킹 관리자에 의한 크레딧 일괄 초기화`,
           actor: req.user,
           balanceBefore: u.credits,
-          balanceAfter: 0
+          balanceAfter: 0,
+          skipWebhook: true
         });
       }
       db.prepare('UPDATE users SET credits = 0').run();
@@ -1233,7 +1395,8 @@ app.post('/api/ranking/reset', authenticateToken, requireRole(['랭킹 관리자
             description: reason ? `[전체 초기화] ${reason}` : `랭킹 관리자에 의한 전체 시즌/포인트 통합 초기화`,
             actor: req.user,
             balanceBefore: u.points,
-            balanceAfter: 0
+            balanceAfter: 0,
+            skipWebhook: true
           });
         }
         if (u.credits !== 0) {
@@ -1245,7 +1408,8 @@ app.post('/api/ranking/reset', authenticateToken, requireRole(['랭킹 관리자
             description: reason ? `[전체 초기화] ${reason}` : `랭킹 관리자에 의한 전체 시즌/크레딧 통합 초기화`,
             actor: req.user,
             balanceBefore: u.credits,
-            balanceAfter: 0
+            balanceAfter: 0,
+            skipWebhook: true
           });
         }
       }
@@ -1264,6 +1428,15 @@ app.post('/api/ranking/reset', authenticateToken, requireRole(['랭킹 관리자
     }
 
     db.exec('COMMIT;');
+
+    sendDiscordWebhook('season_change', {
+      action_label: `랭킹/시즌 초기화 (${scope})${create_new_season && new_season_name.trim() ? ' + 신규 시즌 개막' : ''}`,
+      season_name: (create_new_season && new_season_name.trim()) ? new_season_name.trim() : (activeSeason?.name || '전체 시즌'),
+      period: activeSeason ? `${activeSeason.start_date || ''} ~ ${activeSeason.end_date || ''}` : '-',
+      description: reason || '랭킹 관리자에 의한 초기화 실행',
+      actor_name: `${req.user.nickname || req.user.username} (@${req.user.username})`
+    });
+
     res.json({
       message: '선택한 범위의 랭킹 및 수치 초기화가 완료되었습니다.',
       createdSeasonId
@@ -1362,6 +1535,24 @@ app.put('/api/ranking/users/:userId', authenticateToken, requireRole(['랭킹 �
     }
 
     db.exec('COMMIT;');
+
+    const updatedTarget = db.prepare('SELECT points, credits FROM users WHERE id = ?').get(userId);
+    const diffPtsTotal = (updatedTarget?.points || 0) - (targetUser.points || 0);
+    const diffCredsTotal = (updatedTarget?.credits || 0) - (targetUser.credits || 0);
+    if (diffPtsTotal !== 0 || diffCredsTotal !== 0) {
+      sendDiscordWebhook('manual_adjust', {
+        target_name: targetUser.nickname || targetUser.username,
+        target_username: targetUser.username,
+        point_diff: diffPtsTotal,
+        credit_diff: diffCredsTotal,
+        points_after: updatedTarget?.points || 0,
+        credits_after: updatedTarget?.credits || 0,
+        category: '랭킹 관리자 정밀 수치 수정',
+        reason: reason || '랭킹 보드 정밀 조정',
+        actor_name: `${req.user.nickname || req.user.username} (@${req.user.username})`
+      });
+    }
+
     res.json({ message: `[${targetUser.nickname || targetUser.username}] 플레이어의 랭킹 세부 수치 및 설정이 업데이트되었습니다.` });
   } catch (err) {
     db.exec('ROLLBACK;');
@@ -1424,7 +1615,8 @@ app.post('/api/ranking/bulk-adjust', authenticateToken, requireRole(['랭킹 관
             description: reason ? `[전체 일괄 조정] ${reason}` : `랭킹 관리자에 의한 전체 플레이어 포인트 일괄 증감`,
             actor: req.user,
             balanceBefore: u.points || 0,
-            balanceAfter: nextPts
+            balanceAfter: nextPts,
+            skipWebhook: true
           });
         }
       }
@@ -1442,7 +1634,8 @@ app.post('/api/ranking/bulk-adjust', authenticateToken, requireRole(['랭킹 관
             description: reason ? `[전체 일괄 조정] ${reason}` : `랭킹 관리자에 의한 전체 플레이어 크레딧 일괄 증감`,
             actor: req.user,
             balanceBefore: u.credits || 0,
-            balanceAfter: nextCreds
+            balanceAfter: nextCreds,
+            skipWebhook: true
           });
         }
       }
@@ -1451,6 +1644,22 @@ app.post('/api/ranking/bulk-adjust', authenticateToken, requireRole(['랭킹 관
     }
 
     db.exec('COMMIT;');
+
+    const actionLabels = {
+      add_season_points: `시즌 포인트 일괄 ${numVal >= 0 ? `+${numVal}` : numVal}P`,
+      add_bonus_points: `보너스 포인트 일괄 ${numVal >= 0 ? `+${numVal}` : numVal}P`,
+      multiply_season_points: `시즌 포인트 배율 x${numVal}`,
+      add_total_points: `누적 연방 포인트 일괄 ${numVal >= 0 ? `+${numVal}` : numVal}P`,
+      add_credits: `보유 크레딧 일괄 ${numVal >= 0 ? `+${numVal.toLocaleString()}` : numVal.toLocaleString()}C`
+    };
+    sendDiscordWebhook('ranking_bulk_adjust', {
+      action_label: actionLabels[action_type] || action_type,
+      value_text: String(numVal),
+      target_count: approvedUsers.length,
+      reason: reason || '전체 플레이어 일괄 지급/조정',
+      actor_name: `${req.user.nickname || req.user.username} (@${req.user.username})`
+    });
+
     res.json({ message: '전체 플레이어 대상 일괄 수치 조정이 완료되었습니다.' });
   } catch (err) {
     db.exec('ROLLBACK;');
@@ -1471,6 +1680,14 @@ app.post('/api/seasons', authenticateToken, requireRole(['시즌 관리', '랭�
     INSERT INTO seasons (name, start_date, end_date, reward_description, target_points, is_active)
     VALUES (?, ?, ?, ?, ?, 0)
   `).run(name, start_date || null, end_date || null, reward_description || '', Number(target_points) || 10000);
+
+  sendDiscordWebhook('season_change', {
+    action_label: '신규 시즌 생성',
+    season_name: name,
+    period: `${start_date || '미정'} ~ ${end_date || '미정'}`,
+    description: reward_description || '',
+    actor_name: `${req.user.nickname || req.user.username} (@${req.user.username})`
+  });
 
   res.json({ message: '시즌이 추가되었습니다.', id: result.lastInsertRowid });
 });
@@ -1499,6 +1716,18 @@ app.delete('/api/seasons/:id', authenticateToken, requireRole(['시즌 관리', 
 app.put('/api/seasons/:id/activate', authenticateToken, requireRole(['시즌 관리', '랭킹 관리자']), (req, res) => {
   db.prepare('UPDATE seasons SET is_active = 0').run();
   db.prepare('UPDATE seasons SET is_active = 1 WHERE id = ?').run(req.params.id);
+
+  const s = db.prepare('SELECT * FROM seasons WHERE id = ?').get(req.params.id);
+  if (s) {
+    sendDiscordWebhook('season_change', {
+      action_label: '시즌 활성화 전환',
+      season_name: s.name,
+      period: `${s.start_date || '미정'} ~ ${s.end_date || '미정'}`,
+      description: s.reward_description || '',
+      actor_name: `${req.user.nickname || req.user.username} (@${req.user.username})`
+    });
+  }
+
   res.json({ message: '선택한 시즌이 활성화되었습니다.' });
 });
 
@@ -1568,6 +1797,15 @@ app.post('/api/shop/purchase', authenticateToken, (req, res) => {
     balanceAfter: beforePts - item.price
   });
 
+  sendDiscordWebhook('shop_purchase', {
+    order_id: result.lastInsertRowid,
+    user_name: req.user.nickname || req.user.username,
+    username: req.user.username,
+    item_name: item.name,
+    points_spent: item.price,
+    remaining_points: beforePts - item.price
+  });
+
   res.json({ message: '구매 신청이 완료되었습니다.', order_id: result.lastInsertRowid });
 });
 
@@ -1598,8 +1836,9 @@ app.put('/api/shop/orders/:id/deliver', authenticateToken, requireRole('샵 관�
   const order = db.prepare('SELECT * FROM shop_orders WHERE id = ?').get(req.params.id);
   if (!order) return res.status(404).json({ error: '주문 내역을 찾을 수 없습니다.' });
 
+  const orderUser = db.prepare('SELECT username, nickname, points FROM users WHERE id = ?').get(order.user_id);
+
   if (status === 'cancelled' && order.status !== 'cancelled') {
-    const u = db.prepare('SELECT points FROM users WHERE id = ?').get(order.user_id);
     db.prepare('UPDATE users SET points = points + ? WHERE id = ?').run(order.points_spent, order.user_id);
     recordAssetTransaction({
       userId: order.user_id,
@@ -1610,14 +1849,34 @@ app.put('/api/shop/orders/:id/deliver', authenticateToken, requireRole('샵 관�
       referenceType: 'shop_order',
       referenceId: order.id,
       actor: req.user,
-      balanceBefore: u?.points || 0,
-      balanceAfter: (u?.points || 0) + order.points_spent
+      balanceBefore: orderUser?.points || 0,
+      balanceAfter: (orderUser?.points || 0) + order.points_spent
     });
     db.prepare("UPDATE shop_orders SET status = 'cancelled' WHERE id = ?").run(req.params.id);
+
+    sendDiscordWebhook('shop_delivery', {
+      order_id: order.id,
+      user_name: orderUser ? (orderUser.nickname || orderUser.username) : `#${order.user_id}`,
+      item_name: order.item_name,
+      points_spent: order.points_spent,
+      status: 'cancelled',
+      reviewer_name: `${req.user.nickname || req.user.username} (@${req.user.username})`
+    });
+
     return res.json({ message: '주문이 취소되었으며 포인트가 환불되었습니다.' });
   }
 
   db.prepare("UPDATE shop_orders SET status = 'delivered' WHERE id = ?").run(req.params.id);
+
+  sendDiscordWebhook('shop_delivery', {
+    order_id: order.id,
+    user_name: orderUser ? (orderUser.nickname || orderUser.username) : `#${order.user_id}`,
+    item_name: order.item_name,
+    points_spent: order.points_spent,
+    status: 'delivered',
+    reviewer_name: `${req.user.nickname || req.user.username} (@${req.user.username})`
+  });
+
   res.json({ message: '상품 수령/지급 처리가 완료되었습니다.' });
 });
 
@@ -1634,27 +1893,42 @@ app.get('/api/jobs', authenticateToken, (req, res) => {
   res.json(jobs);
 });
 
-app.post('/api/jobs', authenticateToken, requireRole('사업가'), (req, res) => {
-  const { work_type, custom_work_type, description, pay_credit, work_date, duration_text, notes } = req.body;
+app.post('/api/jobs', authenticateToken, requireRole(['사업가', '기업 관리']), (req, res) => {
+  const { work_type, custom_work_type, description, pay_credit, work_date, duration_text, notes, federation_points } = req.body;
   if (!work_type || !description || pay_credit == null || !work_date || !duration_text) {
     return res.status(400).json({ error: '필수 알바 항목들을 모두 입력해주세요.' });
   }
 
+  const canManageCorp = req.user.is_admin === 1 || req.user.roleList.includes('기업 관리');
+  const initialFedPts = canManageCorp && federation_points !== undefined ? Number(federation_points) || 0 : 0;
+
   const result = db.prepare(`
     INSERT INTO part_time_jobs (
-      employer_id, work_type, custom_work_type, description, pay_credit,
+      employer_id, work_type, custom_work_type, description, pay_credit, federation_points,
       work_date, duration_text, notes, status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending_approval')
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_approval')
   `).run(
     req.user.id,
     work_type,
     custom_work_type || null,
     description,
     Number(pay_credit),
+    initialFedPts,
     work_date,
     duration_text,
     notes || null
   );
+
+  sendDiscordWebhook('job_request', {
+    id: result.lastInsertRowid,
+    employer_name: req.user.nickname || req.user.username,
+    work_type: work_type === '기타' && custom_work_type ? custom_work_type : work_type,
+    description,
+    pay_credit: Number(pay_credit),
+    work_date,
+    duration_text,
+    notes: notes || ''
+  });
 
   res.json({ message: '알바 구인 등록이 신청되었습니다. (기업 관리자의 포인트 책정 승인 대기)', id: result.lastInsertRowid });
 });
@@ -1693,6 +1967,19 @@ app.post('/api/jobs/:id/apply', authenticateToken, (req, res) => {
   if (job.employer_id === req.user.id) return res.status(400).json({ error: '본인이 등록한 알바에는 지원할 수 없습니다.' });
 
   db.prepare("UPDATE part_time_jobs SET worker_id = ?, status = 'in_progress' WHERE id = ?").run(req.user.id, req.params.id);
+
+  const employer = db.prepare('SELECT username, nickname FROM users WHERE id = ?').get(job.employer_id);
+  sendDiscordWebhook('job_progress', {
+    id: job.id,
+    action_label: '구직자 지원 및 작업 착수',
+    work_type: job.work_type === '기타' && job.custom_work_type ? job.custom_work_type : job.work_type,
+    employer_name: employer ? (employer.nickname || employer.username) : `#${job.employer_id}`,
+    worker_name: req.user.nickname || req.user.username,
+    pay_credit: job.pay_credit,
+    federation_points: job.federation_points,
+    status_label: '작업 진행중 (in_progress)'
+  });
+
   res.json({ message: '알바에 지원 및 채용되었습니다! 작업을 시작하세요.' });
 });
 
@@ -1721,6 +2008,19 @@ app.post('/api/jobs/:id/complete', authenticateToken, (req, res) => {
     SET employer_completed = ?, worker_completed = ?, status = ?
     WHERE id = ?
   `).run(employerCompleted, workerCompleted, newStatus, req.params.id);
+
+  const employer = db.prepare('SELECT username, nickname FROM users WHERE id = ?').get(job.employer_id);
+  const worker = job.worker_id ? db.prepare('SELECT username, nickname FROM users WHERE id = ?').get(job.worker_id) : null;
+  sendDiscordWebhook('job_progress', {
+    id: job.id,
+    action_label: newStatus === 'both_done_pending_review' ? '양측 완료 확인 (최종 정산 대기)' : `${job.employer_id === req.user.id ? '고용주' : '구직자'} 완료 확인`,
+    work_type: job.work_type === '기타' && job.custom_work_type ? job.custom_work_type : job.work_type,
+    employer_name: employer ? (employer.nickname || employer.username) : `#${job.employer_id}`,
+    worker_name: worker ? (worker.nickname || worker.username) : '-',
+    pay_credit: job.pay_credit,
+    federation_points: job.federation_points,
+    status_label: newStatus === 'both_done_pending_review' ? '양측 완료 · 관리자 정산 대기' : '상대방 완료 확인 대기'
+  });
 
   res.json({
     message: newStatus === 'both_done_pending_review'
@@ -1837,9 +2137,36 @@ app.put('/api/jobs/:id/finalize', authenticateToken, requireRole('기업 관리'
 
     db.prepare("UPDATE part_time_jobs SET status = 'completed', pay_credit = ?, federation_points = ? WHERE id = ?")
       .run(finalPayCredit, finalFedPoints, req.params.id);
+
+    const employer = db.prepare('SELECT username, nickname FROM users WHERE id = ?').get(job.employer_id);
+    const worker = job.worker_id ? db.prepare('SELECT username, nickname FROM users WHERE id = ?').get(job.worker_id) : null;
+    sendDiscordWebhook('job_payout', {
+      id: job.id,
+      work_type: job.work_type === '기타' && job.custom_work_type ? job.custom_work_type : job.work_type,
+      employer_name: employer ? (employer.nickname || employer.username) : `#${job.employer_id}`,
+      worker_name: worker ? (worker.nickname || worker.username) : '-',
+      pay_credit: finalPayCredit,
+      federation_points: finalFedPoints,
+      reviewer_name: `${req.user.nickname || req.user.username} (@${req.user.username})`
+    });
+
     res.json({ message: `최종 승인 및 포인트(+${finalFedPoints}P)/보수(+${finalPayCredit.toLocaleString()}C) 지급이 완료되었습니다.` });
   } else {
     db.prepare("UPDATE part_time_jobs SET status = 'cancelled' WHERE id = ?").run(req.params.id);
+
+    const employer = db.prepare('SELECT username, nickname FROM users WHERE id = ?').get(job.employer_id);
+    const worker = job.worker_id ? db.prepare('SELECT username, nickname FROM users WHERE id = ?').get(job.worker_id) : null;
+    sendDiscordWebhook('job_progress', {
+      id: job.id,
+      action_label: '단기 알바 거절/취소 처리',
+      work_type: job.work_type === '기타' && job.custom_work_type ? job.custom_work_type : job.work_type,
+      employer_name: employer ? (employer.nickname || employer.username) : `#${job.employer_id}`,
+      worker_name: worker ? (worker.nickname || worker.username) : '-',
+      pay_credit: job.pay_credit,
+      federation_points: job.federation_points,
+      status_label: '거절/취소됨 (cancelled)'
+    });
+
     res.json({ message: '알바가 거절/취소 처리되었습니다.' });
   }
 });
@@ -1981,6 +2308,15 @@ app.post('/api/quests/:id/submit', authenticateToken, upload.single('proof_image
     VALUES (?, ?, ?, ?, 'pending')
   `).run(req.params.id, req.user.id, proof_text || '', proof_image);
 
+  const qRow = db.prepare('SELECT title FROM quests WHERE id = ?').get(req.params.id);
+  sendDiscordWebhook('quest_submission', {
+    submission_id: result.lastInsertRowid,
+    user_name: req.user.nickname || req.user.username,
+    username: req.user.username,
+    quest_title: qRow?.title || `퀘스트 #${req.params.id}`,
+    proof_text: proof_text || ''
+  });
+
   res.json({ message: '퀘스트 완료 제출이 완료되었습니다.', id: result.lastInsertRowid });
 });
 
@@ -1991,9 +2327,10 @@ app.put('/api/quests/submissions/:id/review', authenticateToken, requireRole('�
   }
 
   const sub = db.prepare(`
-    SELECT qs.*, q.title as quest_title, q.point_reward, q.credit_reward
+    SELECT qs.*, q.title as quest_title, q.point_reward, q.credit_reward, u.username, u.nickname
     FROM quest_submissions qs
     JOIN quests q ON qs.quest_id = q.id
+    JOIN users u ON qs.user_id = u.id
     WHERE qs.id = ?
   `).get(req.params.id);
 
@@ -2064,6 +2401,28 @@ app.put('/api/quests/submissions/:id/review', authenticateToken, requireRole('�
     SET status = ?, admin_comment = ?, custom_points = ?, custom_credits = ?, reviewed_by = ?
     WHERE id = ?
   `).run(status, admin_comment || '', finalPoints, finalCredits, req.user.id, req.params.id);
+
+  if (status === 'approved') {
+    sendDiscordWebhook('quest_reward', {
+      submission_id: sub.id,
+      user_name: sub.nickname || sub.username,
+      username: sub.username,
+      quest_title: sub.quest_title,
+      points_earned: finalPoints,
+      credits_earned: finalCredits,
+      admin_comment: admin_comment || '',
+      reviewer_name: `${req.user.nickname || req.user.username} (@${req.user.username})`
+    });
+  } else {
+    sendDiscordWebhook('quest_rejected', {
+      submission_id: sub.id,
+      user_name: sub.nickname || sub.username,
+      username: sub.username,
+      quest_title: sub.quest_title,
+      admin_comment: admin_comment || '',
+      reviewer_name: `${req.user.nickname || req.user.username} (@${req.user.username})`
+    });
+  }
 
   res.json({ message: `퀘스트 신청이 ${status === 'approved' ? `승인 (+${finalPoints}P, +${finalCredits.toLocaleString()}C)` : '거절'}되었습니다.` });
 });
@@ -2148,6 +2507,15 @@ app.post('/api/credits/exchanges', authenticateToken, (req, res) => {
     balanceAfter: beforeCredits - numAmount
   });
 
+  sendDiscordWebhook('credit_exchange_request', {
+    id: result.lastInsertRowid,
+    user_name: req.user.nickname || req.user.username,
+    username: req.user.username,
+    in_game_name,
+    amount: numAmount,
+    remaining_credits: beforeCredits - numAmount
+  });
+
   res.json({ message: '인게임 원화 환전 요청이 접수되었습니다.', id: result.lastInsertRowid });
 });
 
@@ -2157,7 +2525,12 @@ app.put('/api/credits/exchanges/:id/review', authenticateToken, requireRole('크
     return res.status(400).json({ error: '올바른 완료/거절 상태를 지정하세요.' });
   }
 
-  const ex = db.prepare('SELECT * FROM credit_exchanges WHERE id = ?').get(req.params.id);
+  const ex = db.prepare(`
+    SELECT ce.*, u.username, u.nickname
+    FROM credit_exchanges ce
+    JOIN users u ON ce.user_id = u.id
+    WHERE ce.id = ?
+  `).get(req.params.id);
   if (!ex) return res.status(404).json({ error: '환전 내역을 찾을 수 없습니다.' });
   if (ex.status !== 'pending') return res.status(400).json({ error: '이미 처리된 요청입니다.' });
 
@@ -2184,6 +2557,17 @@ app.put('/api/credits/exchanges/:id/review', authenticateToken, requireRole('크
     SET status = ?, admin_comment = ?, processed_by = ?, processed_at = CURRENT_TIMESTAMP
     WHERE id = ?
   `).run(status, admin_comment || '', req.user.id, req.params.id);
+
+  sendDiscordWebhook('credit_exchange_review', {
+    id: ex.id,
+    status,
+    user_name: ex.nickname || ex.username,
+    username: ex.username,
+    in_game_name: ex.in_game_name,
+    amount: ex.amount,
+    admin_comment: admin_comment || '',
+    reviewer_name: `${req.user.nickname || req.user.username} (@${req.user.username})`
+  });
 
   res.json({ message: `크레딧 환전 요청이 ${status === 'completed' ? '완료' : '거절(환불)'} 처리되었습니다.` });
 });
@@ -2232,6 +2616,16 @@ app.post('/api/credits/charges', authenticateToken, upload.single('proof_image')
     VALUES (?, ?, ?, ?, ?, ?, 'pending')
   `).run(req.user.id, nickname.trim(), numAmount, proof_image, charge_datetime.trim(), notes || '');
 
+  sendDiscordWebhook('credit_charge_request', {
+    id: result.lastInsertRowid,
+    user_name: req.user.nickname || req.user.username,
+    username: req.user.username,
+    in_game_name: nickname.trim(),
+    amount: numAmount,
+    charge_datetime: charge_datetime.trim(),
+    notes: notes || ''
+  });
+
   res.json({
     message: '크레딧 충전 신청이 접수되었습니다! 크레딧 관리자가 확인 후 충전 처리합니다.',
     id: result.lastInsertRowid
@@ -2244,7 +2638,12 @@ app.put('/api/credits/charges/:id/review', authenticateToken, requireRole('크�
     return res.status(400).json({ error: '올바른 승인/거절 상태를 지정하세요.' });
   }
 
-  const charge = db.prepare('SELECT * FROM credit_charges WHERE id = ?').get(req.params.id);
+  const charge = db.prepare(`
+    SELECT cc.*, u.username, u.nickname as user_nickname
+    FROM credit_charges cc
+    JOIN users u ON cc.user_id = u.id
+    WHERE cc.id = ?
+  `).get(req.params.id);
   if (!charge) return res.status(404).json({ error: '충전 신청 내역을 찾을 수 없습니다.' });
   if (charge.status !== 'pending') return res.status(400).json({ error: '이미 처리된 충전 신청입니다.' });
 
@@ -2308,6 +2707,18 @@ app.put('/api/credits/charges/:id/review', authenticateToken, requireRole('크�
     SET status = ?, approved_amount = ?, bonus_points = ?, admin_comment = ?, processed_by = ?, processed_at = CURRENT_TIMESTAMP
     WHERE id = ?
   `).run(status, finalCredit, finalBonusPts, admin_comment || '', req.user.id, req.params.id);
+
+  sendDiscordWebhook('credit_charge_review', {
+    id: charge.id,
+    status,
+    user_name: charge.user_nickname || charge.username,
+    username: charge.username,
+    in_game_name: charge.nickname,
+    approved_amount: status === 'approved' ? finalCredit : charge.amount,
+    bonus_points: finalBonusPts,
+    admin_comment: admin_comment || '',
+    reviewer_name: `${req.user.nickname || req.user.username} (@${req.user.username})`
+  });
 
   res.json({
     message: status === 'approved'
@@ -2420,6 +2831,18 @@ app.post('/api/transactions/manual', authenticateToken, requireRole('데이터 �
     actor: req.user,
     balanceBefore: currentBal,
     balanceAfter: nextBal
+  });
+
+  sendDiscordWebhook('manual_adjust', {
+    target_name: targetUser.nickname || targetUser.username,
+    target_username: targetUser.username,
+    point_diff: normalizedAsset === 'POINT' ? signedAmt : 0,
+    credit_diff: normalizedAsset === 'CREDIT' ? signedAmt : 0,
+    points_after: normalizedAsset === 'POINT' ? nextBal : (targetUser.points || 0),
+    credits_after: normalizedAsset === 'CREDIT' ? nextBal : (targetUser.credits || 0),
+    category: category || '데이터 관리자 수기 기록',
+    reason: description || '데이터 관리자에 의한 수동 입출금 기록',
+    actor_name: `${req.user.nickname || req.user.username} (@${req.user.username})`
   });
 
   res.json({ message: '입출금 상세 기록이 성공적으로 등록되었습니다.' });
@@ -2754,9 +3177,118 @@ app.post('/api/settings/test-webhook', authenticateToken, requireAdmin, async (r
   }
 });
 
+// --- 디스코드 웹훅 개별 이벤트 상세 설정 관리 (지급 기록 포함 26종 전체) ---
+app.get('/api/webhooks', authenticateToken, requireAdmin, (req, res) => {
+  const globalRow = db.prepare("SELECT value FROM settings WHERE key = 'discord_webhook_url'").get();
+  const configs = getAllWebhookConfigs();
+  res.json({
+    global_webhook_url: globalRow ? globalRow.value : '',
+    configs,
+    catalog: WEBHOOK_EVENT_CATALOG
+  });
+});
+
+app.put('/api/webhooks', authenticateToken, requireAdmin, (req, res) => {
+  const { global_webhook_url, configs } = req.body || {};
+
+  db.exec('BEGIN TRANSACTION;');
+  try {
+    if (global_webhook_url !== undefined) {
+      db.prepare(`
+        INSERT INTO settings (key, value) VALUES ('discord_webhook_url', ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+      `).run(String(global_webhook_url || '').trim());
+    }
+
+    if (Array.isArray(configs)) {
+      const upsertStmt = db.prepare(`
+        INSERT INTO webhook_configs (event_key, category, label, description, enabled, webhook_url, mention_type, custom_color, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(event_key) DO UPDATE SET
+          enabled = excluded.enabled,
+          webhook_url = excluded.webhook_url,
+          mention_type = excluded.mention_type,
+          custom_color = excluded.custom_color,
+          updated_at = CURRENT_TIMESTAMP
+      `);
+
+      for (const item of configs) {
+        if (!item || !item.event_key) continue;
+        const meta = WEBHOOK_EVENT_CATALOG.find(c => c.event_key === item.event_key);
+        upsertStmt.run(
+          item.event_key,
+          item.category || meta?.category || '기타',
+          item.label || meta?.label || item.event_key,
+          item.description || meta?.description || '',
+          item.enabled ? 1 : 0,
+          String(item.webhook_url || '').trim(),
+          String(item.mention_type || 'none').trim(),
+          String(item.custom_color || '').trim()
+        );
+      }
+    }
+
+    db.exec('COMMIT;');
+    res.json({
+      message: '웹훅 상세 설정이 저장되었습니다.',
+      configs: getAllWebhookConfigs()
+    });
+  } catch (err) {
+    db.exec('ROLLBACK;');
+    res.status(500).json({ error: `웹훅 설정 저장 실패: ${err.message}` });
+  }
+});
+
+app.put('/api/webhooks/:eventKey', authenticateToken, requireAdmin, (req, res) => {
+  const { eventKey } = req.params;
+  const { enabled, webhook_url, mention_type, custom_color } = req.body || {};
+  const meta = WEBHOOK_EVENT_CATALOG.find(c => c.event_key === eventKey);
+  if (!meta) return res.status(404).json({ error: '존재하지 않는 웹훅 이벤트 키입니다.' });
+
+  const existing = db.prepare('SELECT * FROM webhook_configs WHERE event_key = ?').get(eventKey);
+  db.prepare(`
+    INSERT INTO webhook_configs (event_key, category, label, description, enabled, webhook_url, mention_type, custom_color, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(event_key) DO UPDATE SET
+      enabled = excluded.enabled,
+      webhook_url = excluded.webhook_url,
+      mention_type = excluded.mention_type,
+      custom_color = excluded.custom_color,
+      updated_at = CURRENT_TIMESTAMP
+  `).run(
+    eventKey,
+    meta.category,
+    meta.label,
+    meta.description,
+    enabled !== undefined ? (enabled ? 1 : 0) : (existing ? existing.enabled : (meta.default_enabled ? 1 : 0)),
+    webhook_url !== undefined ? String(webhook_url).trim() : (existing ? existing.webhook_url : ''),
+    mention_type !== undefined ? String(mention_type).trim() : (existing ? existing.mention_type : 'none'),
+    custom_color !== undefined ? String(custom_color).trim() : (existing ? existing.custom_color : '')
+  );
+
+  res.json({
+    message: `[${meta.label}] 웹훅 설정이 업데이트되었습니다.`,
+    configs: getAllWebhookConfigs()
+  });
+});
+
+app.post('/api/webhooks/:eventKey/test', authenticateToken, requireAdmin, async (req, res) => {
+  const { eventKey } = req.params;
+  const { custom_url } = req.body || {};
+  const meta = WEBHOOK_EVENT_CATALOG.find(c => c.event_key === eventKey);
+  if (!meta) return res.status(404).json({ error: '존재하지 않는 웹훅 이벤트입니다.' });
+
+  const result = await sendTestEventWebhook(eventKey, custom_url);
+  if (!result.ok) {
+    return res.status(400).json({ error: result.error || '웹훅 테스트 발송에 실패했습니다.' });
+  }
+  res.json({ message: `[${meta.label}] 테스트 웹훅이 디스코드 채널로 발송되었습니다!` });
+});
+
 // --- 슈퍼관리자 전용 데이터 백업 및 복원 (JSON) ---
 const DB_TABLES = [
   'settings',
+  'webhook_configs',
   'users',
   'roles',
   'user_roles',

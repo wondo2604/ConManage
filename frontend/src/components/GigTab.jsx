@@ -30,8 +30,13 @@ export default function GigTab({ user, refreshUser }) {
     status: 'pending_approval'
   });
 
-  const canCreateGig = user.is_admin || user.permissions?.includes('사업가');
-  const canManageCorporate = user.is_admin || user.permissions?.includes('기업 관리');
+  const hasPerm = (key) =>
+    user.is_admin ||
+    user.permissions?.includes(key) ||
+    user.roles?.some(r => (typeof r === 'string' ? r.includes(key) : r.name?.includes(key)));
+
+  const canCreateGig = hasPerm('사업가') || hasPerm('기업 관리');
+  const canManageCorporate = hasPerm('기업 관리');
 
   const loadData = async () => {
     try {
@@ -56,6 +61,7 @@ export default function GigTab({ user, refreshUser }) {
 
   useEffect(() => {
     loadData();
+    if (refreshUser) refreshUser();
   }, []);
 
   const handleCreateJob = async (e) => {
