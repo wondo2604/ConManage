@@ -28,7 +28,12 @@ export default function QuestTab({ user, refreshUser }) {
     proof_image: null
   });
 
-  const canManageQuest = user.is_admin || user.roles?.includes('퀘스트 관리');
+  // 심사 시 수치 직접 조절 지원
+  const [reviewPts, setReviewPts] = useState({});
+  const [reviewCreds, setReviewCreds] = useState({});
+  const [reviewComment, setReviewComment] = useState({});
+
+  const canManageQuest = user.is_admin || user.permissions?.includes('퀘스트 관리');
 
   const loadData = async () => {
     try {
@@ -39,6 +44,17 @@ export default function QuestTab({ user, refreshUser }) {
       ]);
       setQuests(questsData);
       setSubmissions(submissionsData);
+
+      const defaultPts = {};
+      const defaultCreds = {};
+      submissionsData.forEach(s => {
+        if (s.status === 'pending') {
+          defaultPts[s.id] = s.point_reward;
+          defaultCreds[s.id] = s.credit_reward;
+        }
+      });
+      setReviewPts(prev => ({ ...defaultPts, ...prev }));
+      setReviewCreds(prev => ({ ...defaultCreds, ...prev }));
     } catch (err) {
       console.error(err);
     } finally {
@@ -115,14 +131,27 @@ export default function QuestTab({ user, refreshUser }) {
     }
   };
 
-  const handleReviewSubmission = async (subId, status) => {
-    if (!confirm(`이 퀘스트 완료 신청을 ${status === 'approved' ? '승인' : '거절'}하시겠습니까?`)) return;
+  const handleReviewSubmission = async (sub, status) => {
+    const subId = sub.id;
+    const customPts = reviewPts[subId] ?? sub.point_reward;
+    const customCreds = reviewCreds[subId] ?? sub.credit_reward;
+    const comment = reviewComment[subId] || '';
+
+    const msg = status === 'approved'
+      ? `이 퀘스트 완료 신청을 승인하시겠습니까?\n지급 예정: +${Number(customPts).toLocaleString()} P / +${Number(customCreds).toLocaleString()} C`
+      : `이 퀘스트 완료 신청을 거절하시겠습니까?`;
+    if (!confirm(msg)) return;
     try {
-      await apiRequest(`/quests/submissions/${subId}/review`, {
+      const res = await apiRequest(`/quests/submissions/${subId}/review`, {
         method: 'PUT',
-        body: JSON.stringify({ status })
+        body: JSON.stringify({
+          status,
+          custom_points: customPts,
+          custom_credits: customCreds,
+          admin_comment: comment
+        })
       });
-      alert(`퀘스트가 ${status === 'approved' ? '승인되어 보상이 지급' : '거절'}되었습니다.`);
+      alert(res.message || `퀘스트가 ${status === 'approved' ? '승인되어 보상이 지급' : '거절'}되었습니다.`);
       loadData();
       if (refreshUser) refreshUser();
     } catch (err) {
@@ -298,27 +327,70 @@ export default function QuestTab({ user, refreshUser }) {
                     </td>
                     <td>
                       <div style={{ fontSize: 12 }}>
-                        <span style={{ color: '#fbbf24', fontWeight: 600 }}>+{sub.point_reward} P</span> | <span style={{ color: '#34d399', fontWeight: 600 }}>+{sub.credit_reward.toLocaleString()} C</span>
+                        <span style={{ color: 'var(--point-gold)', fontWeight: 700 }}>
+                          +{(sub.custom_points ?? sub.point_reward).toLocaleString()} P
+                        </span>
+                        {' | '}
+                        <span style={{ color: 'var(--point-emerald)', fontWeight: 700 }}>
+                          +{(sub.custom_credits ?? sub.credit_reward).toLocaleString()} C
+                        </span>
                       </div>
                     </td>
                     <td>
                       {sub.status === 'pending' && <span className="badge badge-pending">심사 대기중</span>}
                       {sub.status === 'approved' && <span className="badge badge-approved">승인 완료</span>}
                       {sub.status === 'rejected' && <span className="badge badge-rejected">거절됨</span>}
+                      {sub.admin_comment && (
+                        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+                          비고: {sub.admin_comment}
+                        </div>
+                      )}
                     </td>
                     {canManageQuest && (
                       <td>
                         {sub.status === 'pending' ? (
-                          <div style={{ display: 'flex', gap: 6 }}>
-                            <button className="btn btn-success btn-sm" onClick={() => handleReviewSubmission(sub.id, 'approved')}>
-                              <CheckCircle size={13} /> 승인
-                            </button>
-                            <button className="btn btn-danger btn-sm" onClick={() => handleReviewSubmission(sub.id, 'rejected')}>
-                              <XCircle size={13} /> 거절
-                            </button>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 200 }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 }}>
+                              <div>
+                                <label style={{ fontSize: 10, color: 'var(--text-muted)' }}>지급 포인트(P)</label>
+                                <input
+                                  type="number"
+                                  className="input"
+                                  style={{ padding: '4px 6px', fontSize: 12 }}
+                                  value={reviewPts[sub.id] ?? sub.point_reward}
+                                  onChange={(e) => setReviewPts({ ...reviewPts, [sub.id]: e.target.value })}
+                                />
+                              </div>
+                              <div>
+                                <label style={{ fontSize: 10, color: 'var(--text-muted)' }}>지급 크레딧(C)</label>
+                                <input
+                                  type="number"
+                                  className="input"
+                                  style={{ padding: '4px 6px', fontSize: 12 }}
+                                  value={reviewCreds[sub.id] ?? sub.credit_reward}
+                                  onChange={(e) => setReviewCreds({ ...reviewCreds, [sub.id]: e.target.value })}
+                                />
+                              </div>
+                            </div>
+                            <input
+                              type="text"
+                              className="input"
+                              placeholder="심사 코멘트 (선택)"
+                              style={{ padding: '4px 8px', fontSize: 12 }}
+                              value={reviewComment[sub.id] || ''}
+                              onChange={(e) => setReviewComment({ ...reviewComment, [sub.id]: e.target.value })}
+                            />
+                            <div style={{ display: 'flex', gap: 6 }}>
+                              <button className="btn btn-success btn-sm" style={{ flex: 1 }} onClick={() => handleReviewSubmission(sub, 'approved')}>
+                                <CheckCircle size={13} /> 승인
+                              </button>
+                              <button className="btn btn-danger btn-sm" style={{ flex: 1 }} onClick={() => handleReviewSubmission(sub, 'rejected')}>
+                                <XCircle size={13} /> 거절
+                              </button>
+                            </div>
                           </div>
                         ) : (
-                          <span style={{ fontSize: 12, color: '#64748b' }}>처리 완료</span>
+                          <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>처리 완료</span>
                         )}
                       </td>
                     )}

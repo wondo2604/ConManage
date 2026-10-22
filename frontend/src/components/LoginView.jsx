@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { apiRequest, setAuthToken } from '../api';
-import { Shield, KeyRound, User, Sparkles, CheckCircle2 } from 'lucide-react';
+import { Shield, KeyRound, User, CheckCircle2 } from 'lucide-react';
 
 export default function LoginView({ onLoginSuccess, branding }) {
   const [isRegister, setIsRegister] = useState(false);
@@ -41,11 +41,6 @@ export default function LoginView({ onLoginSuccess, branding }) {
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleAdminQuickFill = () => {
-    setUsername('admin');
-    setPassword('admin');
   };
 
   return (
@@ -181,7 +176,7 @@ export default function LoginView({ onLoginSuccess, branding }) {
           paddingTop: 18,
           borderTop: '1px solid var(--border-color)',
           display: 'flex',
-          justifyContent: 'space-between',
+          justifyContent: 'center',
           alignItems: 'center',
           fontSize: 13
         }}>
@@ -203,29 +198,6 @@ export default function LoginView({ onLoginSuccess, branding }) {
           >
             {isRegister ? '이미 계정이 있으신가요? 로그인' : '새로운 플레이어 등록 (회원가입)'}
           </button>
-
-          {!isRegister && (
-            <button
-              type="button"
-              onClick={handleAdminQuickFill}
-              style={{
-                background: 'var(--bg-tertiary)',
-                border: '1px solid var(--border-color)',
-                color: 'var(--text-secondary)',
-                padding: '6px 12px',
-                borderRadius: 'var(--radius-pill)',
-                cursor: 'pointer',
-                fontSize: 12,
-                fontWeight: 600,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 5,
-                transition: 'all 0.15s ease'
-              }}
-            >
-              <Sparkles size={13} color="var(--primary)" /> admin 채우기
-            </button>
-          )}
         </div>
       </div>
     </div>

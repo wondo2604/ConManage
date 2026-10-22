@@ -7,8 +7,13 @@ import multer from 'multer';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { db, initDatabase, ALL_ROLES } from './db.js';
+import {
+  db, initDatabase, recordAssetTransaction,
+  PERMISSION_CATALOG, sanitizePermissions, normalizeRolePositions,
+  getUserAccess, migrateLegacyUserPermissions
+} from './db.js';
 import { sendDiscordWebhook, sendNoticeDiscordWebhook, getGlobalWebhookUrl } from './discord.js';
+import zlib from 'node:zlib';
 
 dotenv.config();
 
@@ -56,18 +61,44 @@ function authenticateToken(req, res, next) {
 
   jwt.verify(token, JWT_SECRET, (err, user) => {
     if (err) return res.status(403).json({ error: '유효하지 않거나 만료된 토큰입니다.' });
-    const freshUser = db.prepare('SELECT id, username, nickname, points, credits, must_change_password, is_admin, roles, status FROM users WHERE id = ?').get(user.id);
+    const freshUser = db.prepare('SELECT id, username, nickname, points, credits, custom_title, must_change_password, is_admin, status FROM users WHERE id = ?').get(user.id);
     if (!freshUser) return res.status(404).json({ error: '존재하지 않는 유저입니다.' });
 
-    freshUser.roleList = JSON.parse(freshUser.roles || '[]');
+    // roleList = 부여된 모든 역할의 권한 합집합 (기존 권한 체크 코드와 호환되도록 이름 유지)
+    const access = getUserAccess(freshUser.id);
+    freshUser.roleList = access.permissions;
+    freshUser.assignedRoles = access.roles;
+    freshUser.topRolePosition = access.topPosition;
     req.user = freshUser;
     next();
   });
 }
 
+// 프론트엔드에 내려줄 사용자 정보 (로그인 / me 공통)
+function buildClientUser(u) {
+  const access = getUserAccess(u.id);
+  return {
+    id: u.id,
+    username: u.username,
+    nickname: u.nickname,
+    points: u.points,
+    credits: u.credits,
+    custom_title: u.custom_title || '',
+    must_change_password: u.must_change_password === 1,
+    is_admin: u.is_admin === 1,
+    permissions: access.permissions,
+    roles: access.roles,
+    status: u.status
+  };
+}
+
 function requireRole(roleName) {
   return (req, res, next) => {
     if (req.user.is_admin === 1) return next();
+    if (Array.isArray(roleName)) {
+      if (roleName.some(r => req.user.roleList.includes(r))) return next();
+      return res.status(403).json({ error: `'${roleName.join(' 또는 ')}' 권한이 필요합니다.` });
+    }
     if (req.user.roleList.includes(roleName)) return next();
     return res.status(403).json({ error: `'${roleName}' 권한이 필요합니다.` });
   };
@@ -76,6 +107,13 @@ function requireRole(roleName) {
 function requireAdmin(req, res, next) {
   if (req.user.is_admin === 1) return next();
   return res.status(403).json({ error: '슈퍼관리자 권한이 필요합니다.' });
+}
+
+function getNumericSetting(key, defaultVal = 1) {
+  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
+  if (!row || row.value === undefined || row.value === null || row.value === '') return defaultVal;
+  const parsed = Number(row.value);
+  return isNaN(parsed) ? defaultVal : parsed;
 }
 
 // --- 인증 라우트 ---
@@ -98,27 +136,13 @@ app.post('/api/auth/login', (req, res) => {
     return res.status(403).json({ error: '가입 승인이 거절된 계정입니다. 관리자에게 문의하세요.' });
   }
 
-  const roleList = JSON.parse(user.roles || '[]');
   const token = jwt.sign(
     { id: user.id, username: user.username, is_admin: user.is_admin },
     JWT_SECRET,
     { expiresIn: '7d' }
   );
 
-  res.json({
-    token,
-    user: {
-      id: user.id,
-      username: user.username,
-      nickname: user.nickname,
-      points: user.points,
-      credits: user.credits,
-      must_change_password: user.must_change_password === 1,
-      is_admin: user.is_admin === 1,
-      roles: roleList,
-      status: user.status
-    }
-  });
+  res.json({ token, user: buildClientUser(user) });
 });
 
 app.post('/api/auth/change-password', authenticateToken, (req, res) => {
@@ -139,19 +163,7 @@ app.post('/api/auth/change-password', authenticateToken, (req, res) => {
 });
 
 app.get('/api/auth/me', authenticateToken, (req, res) => {
-  res.json({
-    user: {
-      id: req.user.id,
-      username: req.user.username,
-      nickname: req.user.nickname,
-      points: req.user.points,
-      credits: req.user.credits,
-      must_change_password: req.user.must_change_password === 1,
-      is_admin: req.user.is_admin === 1,
-      roles: req.user.roleList,
-      status: req.user.status
-    }
-  });
+  res.json({ user: buildClientUser(req.user) });
 });
 
 // 회원가입: 즉시 가입되지 않고 'pending' 상태로 등록
@@ -180,21 +192,25 @@ app.post('/api/auth/register', (req, res) => {
 
 // --- 유저 & 계정 관리 ---
 app.get('/api/users', authenticateToken, (req, res) => {
-  const canManage = req.user.is_admin === 1 || req.user.roleList.includes('계정 관리');
+  const canManage = req.user.is_admin === 1 || ['계정 관리', '역할 관리', '랭킹 관리자', '데이터 관리'].some(p => req.user.roleList.includes(p));
   if (!canManage) {
-    return res.status(403).json({ error: '"계정 관리" 또는 슈퍼관리자 권한이 필요합니다.' });
+    return res.status(403).json({ error: '"계정 관리", "역할 관리", "랭킹 관리자", "데이터 관리" 또는 슈퍼관리자 권한이 필요합니다.' });
   }
 
   const users = db.prepare(`
-    SELECT id, username, nickname, points, credits, must_change_password, is_admin, roles, status, created_at
+    SELECT id, username, nickname, points, credits, custom_title, must_change_password, is_admin, status, created_at
     FROM users ORDER BY id ASC
   `).all();
-  const parsed = users.map(u => ({
-    ...u,
-    roles: JSON.parse(u.roles || '[]'),
-    must_change_password: u.must_change_password === 1,
-    is_admin: u.is_admin === 1
-  }));
+  const parsed = users.map(u => {
+    const access = getUserAccess(u.id);
+    return {
+      ...u,
+      roles: access.roles,
+      permissions: access.permissions,
+      must_change_password: u.must_change_password === 1,
+      is_admin: u.is_admin === 1
+    };
+  });
   res.json(parsed);
 });
 
@@ -214,6 +230,22 @@ app.put('/api/users/:id/status', authenticateToken, (req, res) => {
   res.json({ message: `계정이 ${status === 'approved' ? '승인' : '거절'}되었습니다.` });
 });
 
+// 사용자 프로필 상세 수정 (닉네임, 칭호, 아이디 등 - 슈퍼관리자 또는 계정 관리)
+app.put('/api/users/:id/profile', authenticateToken, (req, res) => {
+  const canManage = req.user.is_admin === 1 || req.user.roleList.includes('계정 관리');
+  if (!canManage) {
+    return res.status(403).json({ error: '"계정 관리" 또는 슈퍼관리자 권한이 필요합니다.' });
+  }
+  const { nickname, custom_title, username } = req.body;
+  const target = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
+  if (!target) return res.status(404).json({ error: '유저를 찾을 수 없습니다.' });
+
+  const newUsername = (username && target.username !== 'admin') ? username.trim() : target.username;
+  db.prepare('UPDATE users SET username = ?, nickname = ?, custom_title = ? WHERE id = ?')
+    .run(newUsername, nickname ?? target.nickname, custom_title ?? (target.custom_title || ''), req.params.id);
+  res.json({ message: '플레이어 프로필 및 칭호가 수정되었습니다.' });
+});
+
 // 슈퍼 관리자 계정 생성 (슈퍼관리자만 가능)
 app.post('/api/users/super-admin', authenticateToken, requireAdmin, (req, res) => {
   const { username, password, nickname } = req.body;
@@ -227,12 +259,32 @@ app.post('/api/users/super-admin', authenticateToken, requireAdmin, (req, res) =
   }
 
   const hash = bcrypt.hashSync(password, 10);
-  const allRolesJson = JSON.stringify(ALL_ROLES);
 
   const result = db.prepare(`
     INSERT INTO users (username, password, nickname, points, credits, must_change_password, is_admin, roles, status)
-    VALUES (?, ?, ?, 1000, 50000, 1, 1, ?, 'approved')
-  `).run(username, hash, nickname || '슈퍼관리자', allRolesJson);
+    VALUES (?, ?, ?, 1000, 50000, 1, 1, '[]', 'approved')
+  `).run(username, hash, nickname || '슈퍼관리자');
+
+  recordAssetTransaction({
+    userId: result.lastInsertRowid,
+    assetType: 'POINT',
+    amount: 1000,
+    category: '관리자 계정 생성',
+    description: '슈퍼관리자 계정 생성 초기 연방 포인트 지급',
+    actor: req.user,
+    balanceBefore: 0,
+    balanceAfter: 1000
+  });
+  recordAssetTransaction({
+    userId: result.lastInsertRowid,
+    assetType: 'CREDIT',
+    amount: 50000,
+    category: '관리자 계정 생성',
+    description: '슈퍼관리자 계정 생성 초기 크레딧 지급',
+    actor: req.user,
+    balanceBefore: 0,
+    balanceAfter: 50000
+  });
 
   res.json({
     message: '새로운 슈퍼 관리자 계정이 생성되었습니다. (접속 시 비밀번호 변경 요청)',
@@ -240,19 +292,248 @@ app.post('/api/users/super-admin', authenticateToken, requireAdmin, (req, res) =
   });
 });
 
-app.put('/api/users/:id/roles', authenticateToken, requireAdmin, (req, res) => {
-  const { roles, is_admin } = req.body;
-  const rolesJson = JSON.stringify(roles || []);
-  const isAdminVal = is_admin ? 1 : 0;
-
-  db.prepare('UPDATE users SET roles = ?, is_admin = ? WHERE id = ?').run(rolesJson, isAdminVal, req.params.id);
-  res.json({ message: '역할이 업데이트되었습니다.' });
+// 슈퍼관리자 지정/해제 (슈퍼관리자만)
+app.put('/api/users/:id/admin', authenticateToken, requireAdmin, (req, res) => {
+  const target = db.prepare('SELECT id, username FROM users WHERE id = ?').get(req.params.id);
+  if (!target) return res.status(404).json({ error: '유저를 찾을 수 없습니다.' });
+  const makeAdmin = req.body.is_admin ? 1 : 0;
+  if (!makeAdmin && target.username === 'admin') {
+    return res.status(400).json({ error: '기본 admin 계정의 슈퍼관리자 권한은 해제할 수 없습니다.' });
+  }
+  if (!makeAdmin && target.id === req.user.id) {
+    return res.status(400).json({ error: '자기 자신의 슈퍼관리자 권한은 해제할 수 없습니다.' });
+  }
+  db.prepare('UPDATE users SET is_admin = ? WHERE id = ?').run(makeAdmin, target.id);
+  res.json({ message: makeAdmin ? '슈퍼관리자로 지정되었습니다.' : '슈퍼관리자 권한이 해제되었습니다.' });
 });
 
-app.put('/api/users/:id/assets', authenticateToken, requireAdmin, (req, res) => {
-  const { points, credits } = req.body;
-  db.prepare('UPDATE users SET points = ?, credits = ? WHERE id = ?').run(Number(points) || 0, Number(credits) || 0, req.params.id);
-  res.json({ message: '재화가 업데이트되었습니다.' });
+// ─────────────────────────────────────────────────────────────
+// 디스코드 스타일 역할(Role) 관리
+//  - 슈퍼관리자: 모든 역할 관리 가능
+//  - '역할 관리' 권한자: 자신의 최상위 역할보다 "아래" 있는 역할만 관리/부여 가능,
+//    자신이 가진 권한만 역할에 넣을 수 있음 (디스코드와 동일한 위계 규칙)
+// ─────────────────────────────────────────────────────────────
+function canManageRoles(user) {
+  return user.is_admin === 1 || user.roleList.includes('역할 관리');
+}
+
+function isRoleBelowUser(user, role) {
+  return user.is_admin === 1 || role.position < user.topRolePosition;
+}
+
+function loadRole(id) {
+  const r = db.prepare('SELECT * FROM roles WHERE id = ?').get(id);
+  if (!r) return null;
+  let perms = [];
+  try { perms = JSON.parse(r.permissions || '[]'); } catch { perms = []; }
+  return { ...r, permissions: perms };
+}
+
+// 권한자가 줄 수 없는 권한이 섞여 있는지 확인
+function findForbiddenPermissions(user, perms) {
+  if (user.is_admin === 1) return [];
+  return perms.filter(p => !user.roleList.includes(p));
+}
+
+app.get('/api/permissions', authenticateToken, (req, res) => {
+  res.json(PERMISSION_CATALOG);
+});
+
+app.get('/api/roles', authenticateToken, (req, res) => {
+  const rows = db.prepare(`
+    SELECT r.*, (SELECT COUNT(*) FROM user_roles ur WHERE ur.role_id = r.id) as member_count
+    FROM roles r ORDER BY r.position DESC
+  `).all();
+  res.json(rows.map(r => {
+    let perms = [];
+    try { perms = JSON.parse(r.permissions || '[]'); } catch { perms = []; }
+    return { ...r, permissions: perms, manageable: isRoleBelowUser(req.user, r) && canManageRoles(req.user) };
+  }));
+});
+
+app.post('/api/roles', authenticateToken, (req, res) => {
+  if (!canManageRoles(req.user)) return res.status(403).json({ error: "'역할 관리' 권한이 필요합니다." });
+  const name = String(req.body.name || '').trim();
+  if (!name) return res.status(400).json({ error: '역할 이름을 입력해주세요.' });
+
+  const perms = sanitizePermissions(req.body.permissions);
+  const forbidden = findForbiddenPermissions(req.user, perms);
+  if (forbidden.length) return res.status(403).json({ error: `본인이 가지지 않은 권한은 부여할 수 없습니다: ${forbidden.join(', ')}` });
+
+  // 디스코드처럼 새 역할은 맨 아래에 생성
+  db.exec('BEGIN TRANSACTION;');
+  try {
+    db.prepare('UPDATE roles SET position = position + 1').run();
+    const result = db.prepare('INSERT INTO roles (name, color, position, permissions) VALUES (?, ?, 1, ?)')
+      .run(name, req.body.color || '#99aab5', JSON.stringify(perms));
+    db.exec('COMMIT;');
+    res.json({ message: `'${name}' 역할이 생성되었습니다.`, id: result.lastInsertRowid });
+  } catch (err) {
+    db.exec('ROLLBACK;');
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/roles/order', authenticateToken, (req, res) => {
+  if (!canManageRoles(req.user)) return res.status(403).json({ error: "'역할 관리' 권한이 필요합니다." });
+  const order = Array.isArray(req.body.order) ? req.body.order.map(Number) : null; // 위 → 아래 순서의 id 배열
+  const all = db.prepare('SELECT id, position FROM roles').all();
+  if (!order || order.length !== all.length || new Set(order).size !== all.length || !all.every(r => order.includes(r.id))) {
+    return res.status(400).json({ error: '전체 역할 id 목록을 위에서 아래 순서로 보내주세요.' });
+  }
+
+  const n = order.length;
+  const newPos = new Map(order.map((id, idx) => [id, n - idx]));
+
+  if (req.user.is_admin !== 1) {
+    // 내 최상위 역할 이상에 있는 역할은 위치가 바뀌면 안 된다
+    const locked = all.filter(r => r.position >= req.user.topRolePosition);
+    if (locked.some(r => newPos.get(r.id) !== r.position)) {
+      return res.status(403).json({ error: '자신의 최상위 역할보다 위(또는 같은 위치)의 역할 순서는 변경할 수 없습니다.' });
+    }
+  }
+
+  const upd = db.prepare('UPDATE roles SET position = ? WHERE id = ?');
+  db.exec('BEGIN TRANSACTION;');
+  try {
+    for (const [id, pos] of newPos) upd.run(pos, id);
+    db.exec('COMMIT;');
+  } catch (err) {
+    db.exec('ROLLBACK;');
+    return res.status(500).json({ error: err.message });
+  }
+  res.json({ message: '역할 순서가 저장되었습니다.' });
+});
+
+app.put('/api/roles/:id', authenticateToken, (req, res) => {
+  if (!canManageRoles(req.user)) return res.status(403).json({ error: "'역할 관리' 권한이 필요합니다." });
+  const role = loadRole(req.params.id);
+  if (!role) return res.status(404).json({ error: '역할을 찾을 수 없습니다.' });
+  if (!isRoleBelowUser(req.user, role)) return res.status(403).json({ error: '자신의 최상위 역할보다 아래에 있는 역할만 수정할 수 있습니다.' });
+
+  const name = req.body.name !== undefined ? String(req.body.name).trim() : role.name;
+  if (!name) return res.status(400).json({ error: '역할 이름을 입력해주세요.' });
+
+  let perms = role.permissions;
+  if (req.body.permissions !== undefined) {
+    perms = sanitizePermissions(req.body.permissions);
+    // 바뀌는 권한(추가·제거) 모두 본인이 가진 권한이어야 함
+    const changed = [...perms.filter(p => !role.permissions.includes(p)), ...role.permissions.filter(p => !perms.includes(p))];
+    const forbidden = findForbiddenPermissions(req.user, changed);
+    if (forbidden.length) return res.status(403).json({ error: `본인이 가지지 않은 권한은 변경할 수 없습니다: ${forbidden.join(', ')}` });
+  }
+
+  db.prepare('UPDATE roles SET name = ?, color = ?, permissions = ? WHERE id = ?')
+    .run(name, req.body.color || role.color, JSON.stringify(perms), role.id);
+  res.json({ message: `'${name}' 역할이 저장되었습니다.` });
+});
+
+app.delete('/api/roles/:id', authenticateToken, (req, res) => {
+  if (!canManageRoles(req.user)) return res.status(403).json({ error: "'역할 관리' 권한이 필요합니다." });
+  const role = loadRole(req.params.id);
+  if (!role) return res.status(404).json({ error: '역할을 찾을 수 없습니다.' });
+  if (!isRoleBelowUser(req.user, role)) return res.status(403).json({ error: '자신의 최상위 역할보다 아래에 있는 역할만 삭제할 수 있습니다.' });
+
+  db.prepare('DELETE FROM roles WHERE id = ?').run(role.id);
+  normalizeRolePositions();
+  res.json({ message: `'${role.name}' 역할이 삭제되었습니다.` });
+});
+
+// 사용자에게 역할 부여/해제 (role_ids 전체 목록으로 교체)
+app.put('/api/users/:id/roles', authenticateToken, (req, res) => {
+  if (!canManageRoles(req.user)) return res.status(403).json({ error: "'역할 관리' 권한이 필요합니다." });
+  const target = db.prepare('SELECT id, is_admin FROM users WHERE id = ?').get(req.params.id);
+  if (!target) return res.status(404).json({ error: '유저를 찾을 수 없습니다.' });
+  if (target.is_admin === 1 && req.user.is_admin !== 1) {
+    return res.status(403).json({ error: '슈퍼관리자의 역할은 슈퍼관리자만 변경할 수 있습니다.' });
+  }
+
+  const requested = [...new Set((Array.isArray(req.body.role_ids) ? req.body.role_ids : []).map(Number))];
+  const current = db.prepare('SELECT role_id FROM user_roles WHERE user_id = ?').all(target.id).map(r => r.role_id);
+  const toAdd = requested.filter(id => !current.includes(id));
+  const toRemove = current.filter(id => !requested.includes(id));
+
+  for (const id of [...toAdd, ...toRemove]) {
+    const role = loadRole(id);
+    if (!role) return res.status(400).json({ error: `존재하지 않는 역할입니다 (id: ${id}).` });
+    if (!isRoleBelowUser(req.user, role)) {
+      return res.status(403).json({ error: `'${role.name}' 역할은 자신의 최상위 역할보다 높거나 같아 부여/해제할 수 없습니다.` });
+    }
+  }
+
+  db.exec('BEGIN TRANSACTION;');
+  try {
+    const del = db.prepare('DELETE FROM user_roles WHERE user_id = ? AND role_id = ?');
+    const ins = db.prepare('INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?, ?)');
+    toRemove.forEach(id => del.run(target.id, id));
+    toAdd.forEach(id => ins.run(target.id, id));
+    db.exec('COMMIT;');
+  } catch (err) {
+    db.exec('ROLLBACK;');
+    return res.status(500).json({ error: err.message });
+  }
+  res.json({ message: '사용자 역할이 업데이트되었습니다.' });
+});
+
+app.put('/api/users/:id/assets', authenticateToken, (req, res) => {
+  const canManage = req.user.is_admin === 1 || req.user.roleList.includes('랭킹 관리자') || req.user.roleList.includes('크레딧 관리');
+  if (!canManage) {
+    return res.status(403).json({ error: '재화 조정 권한(슈퍼관리자/랭킹 관리자/크레딧 관리)이 필요합니다.' });
+  }
+
+  const { points, credits, reason, sync_active_season } = req.body;
+  const targetUser = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
+  if (!targetUser) return res.status(404).json({ error: '사용자를 찾을 수 없습니다.' });
+
+  const newPoints = points !== undefined ? Number(points) : targetUser.points;
+  const newCredits = credits !== undefined ? Number(credits) : targetUser.credits;
+  const pointDiff = newPoints - (targetUser.points || 0);
+  const creditDiff = newCredits - (targetUser.credits || 0);
+
+  db.prepare('UPDATE users SET points = ?, credits = ? WHERE id = ?').run(newPoints, newCredits, req.params.id);
+
+  if (pointDiff !== 0) {
+    recordAssetTransaction({
+      userId: targetUser.id,
+      assetType: 'POINT',
+      amount: pointDiff,
+      category: '관리자 수동 조정',
+      description: reason ? `[관리자 조정] ${reason}` : `관리자(${req.user.nickname || req.user.username})에 의한 연방 포인트 수동 조정`,
+      referenceType: 'admin_adjust',
+      referenceId: targetUser.id,
+      actor: req.user,
+      balanceBefore: targetUser.points || 0,
+      balanceAfter: newPoints
+    });
+
+    if (sync_active_season) {
+      const activeSeason = db.prepare('SELECT id FROM seasons WHERE is_active = 1 LIMIT 1').get();
+      if (activeSeason) {
+        db.prepare(`
+          INSERT INTO user_season_points (season_id, user_id, points)
+          VALUES (?, ?, ?)
+          ON CONFLICT(season_id, user_id) DO UPDATE SET points = MAX(0, points + excluded.points)
+        `).run(activeSeason.id, targetUser.id, pointDiff);
+      }
+    }
+  }
+
+  if (creditDiff !== 0) {
+    recordAssetTransaction({
+      userId: targetUser.id,
+      assetType: 'CREDIT',
+      amount: creditDiff,
+      category: '관리자 수동 조정',
+      description: reason ? `[관리자 조정] ${reason}` : `관리자(${req.user.nickname || req.user.username})에 의한 크레딧 수동 조정`,
+      referenceType: 'admin_adjust',
+      referenceId: targetUser.id,
+      actor: req.user,
+      balanceBefore: targetUser.credits || 0,
+      balanceAfter: newCredits
+    });
+  }
+
+  res.json({ message: '재화 수치가 정밀 업데이트되었으며 입출금 원장에 기록되었습니다.' });
 });
 
 app.post('/api/users/:id/reset-password', authenticateToken, (req, res) => {
@@ -424,7 +705,7 @@ app.get('/api/supplies', authenticateToken, (req, res) => {
   res.json(items);
 });
 
-app.post('/api/supplies', authenticateToken, requireRole('납품 등록'), (req, res) => {
+app.post('/api/supplies', authenticateToken, requireRole(['납품 등록', '납품 관리']), (req, res) => {
   const { name, unit, points_per_unit, credits_per_unit, description } = req.body;
   if (!name) return res.status(400).json({ error: '상품명을 입력해주세요.' });
 
@@ -436,7 +717,20 @@ app.post('/api/supplies', authenticateToken, requireRole('납품 등록'), (req,
   res.json({ message: '납품 상품이 등록되었습니다.', id: result.lastInsertRowid });
 });
 
-app.delete('/api/supplies/:id', authenticateToken, requireRole('납품 등록'), (req, res) => {
+app.put('/api/supplies/:id', authenticateToken, requireRole(['납품 등록', '납품 관리']), (req, res) => {
+  const { name, unit, points_per_unit, credits_per_unit, description } = req.body;
+  if (!name) return res.status(400).json({ error: '상품명을 입력해주세요.' });
+
+  db.prepare(`
+    UPDATE supplies
+    SET name = ?, unit = ?, points_per_unit = ?, credits_per_unit = ?, description = ?
+    WHERE id = ?
+  `).run(name, unit || '개', Number(points_per_unit) || 0, Number(credits_per_unit) || 0, description || '', req.params.id);
+
+  res.json({ message: '납품 품목 정보 및 단가 수치가 수정되었습니다.' });
+});
+
+app.delete('/api/supplies/:id', authenticateToken, requireRole(['납품 등록', '납품 관리']), (req, res) => {
   db.prepare('UPDATE supplies SET is_active = 0 WHERE id = ?').run(req.params.id);
   res.json({ message: '납품 상품이 삭제되었습니다.' });
 });
@@ -446,19 +740,27 @@ app.get('/api/supplies/requests', authenticateToken, (req, res) => {
   let list;
   if (canManage) {
     list = db.prepare(`
-      SELECT sr.*, s.name as supply_name, s.unit, s.points_per_unit, s.credits_per_unit,
+      SELECT sr.*,
+             COALESCE(s.name, sr.custom_item_name, '자율 납품 품목') as supply_name,
+             COALESCE(s.unit, sr.custom_unit, '개') as unit,
+             COALESCE(s.points_per_unit, 0) as points_per_unit,
+             COALESCE(s.credits_per_unit, 0) as credits_per_unit,
              u.username, u.nickname
       FROM supply_requests sr
-      JOIN supplies s ON sr.supply_id = s.id
+      LEFT JOIN supplies s ON sr.supply_id = s.id
       JOIN users u ON sr.user_id = u.id
       ORDER BY sr.id DESC
     `).all();
   } else {
     list = db.prepare(`
-      SELECT sr.*, s.name as supply_name, s.unit, s.points_per_unit, s.credits_per_unit,
+      SELECT sr.*,
+             COALESCE(s.name, sr.custom_item_name, '자율 납품 품목') as supply_name,
+             COALESCE(s.unit, sr.custom_unit, '개') as unit,
+             COALESCE(s.points_per_unit, 0) as points_per_unit,
+             COALESCE(s.credits_per_unit, 0) as credits_per_unit,
              u.username, u.nickname
       FROM supply_requests sr
-      JOIN supplies s ON sr.supply_id = s.id
+      LEFT JOIN supplies s ON sr.supply_id = s.id
       JOIN users u ON sr.user_id = u.id
       WHERE sr.user_id = ?
       ORDER BY sr.id DESC
@@ -468,30 +770,86 @@ app.get('/api/supplies/requests', authenticateToken, (req, res) => {
 });
 
 app.post('/api/supplies/requests', authenticateToken, upload.single('proof_image'), (req, res) => {
-  const { supply_id, amount, chest_location } = req.body;
-  if (!supply_id || !amount || !chest_location) {
-    return res.status(400).json({ error: '모든 필수 항목(물품, 수량, 상자 위치)을 입력해주세요.' });
+  const { supply_id, amount, chest_location, is_custom, custom_item_name, custom_unit, custom_items_json, notes } = req.body;
+  const isCustomMode = is_custom === '1' || is_custom === 'true' || is_custom === true || !supply_id;
+
+  if (!chest_location) {
+    return res.status(400).json({ error: '상자 위치를 입력해주세요.' });
   }
 
   const proof_image = req.file ? `/uploads/${req.file.filename}` : null;
-  const result = db.prepare(`
-    INSERT INTO supply_requests (supply_id, user_id, amount, chest_location, proof_image, status)
-    VALUES (?, ?, ?, ?, ?, 'pending')
-  `).run(supply_id, req.user.id, Number(amount), chest_location, proof_image);
 
-  res.json({ message: '납품 신청이 접수되었습니다.', id: result.lastInsertRowid });
+  if (isCustomMode) {
+    let parsedItems = [];
+    try {
+      if (custom_items_json) {
+        parsedItems = typeof custom_items_json === 'string' ? JSON.parse(custom_items_json) : custom_items_json;
+      }
+    } catch (e) {
+      parsedItems = [];
+    }
+
+    let summaryName = custom_item_name || '';
+    let totalAmount = Number(amount) || 1;
+    let mainUnit = custom_unit || '개';
+
+    if (Array.isArray(parsedItems) && parsedItems.length > 0) {
+      const validItems = parsedItems.filter(it => it.name && String(it.name).trim() !== '');
+      if (validItems.length === 0) {
+        return res.status(400).json({ error: '납품할 아이템 이름을 최소 1개 이상 입력해주세요.' });
+      }
+      summaryName = validItems.map(it => `${it.name.trim()} (${it.amount || 1}${it.unit || '개'})`).join(', ');
+      totalAmount = validItems.reduce((acc, it) => acc + (Number(it.amount) || 1), 0);
+      mainUnit = validItems.length === 1 ? (validItems[0].unit || '개') : '종(합산)';
+    } else if (!summaryName.trim()) {
+      return res.status(400).json({ error: '직접 납품할 아이템 이름과 수량을 입력해주세요.' });
+    }
+
+    const result = db.prepare(`
+      INSERT INTO supply_requests (
+        supply_id, is_custom, custom_item_name, custom_unit, custom_items_json,
+        user_id, amount, chest_location, notes, proof_image, status
+      ) VALUES (NULL, 1, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+    `).run(
+      summaryName,
+      mainUnit,
+      typeof custom_items_json === 'string' ? custom_items_json : JSON.stringify(parsedItems),
+      req.user.id,
+      totalAmount,
+      chest_location,
+      notes || '',
+      proof_image
+    );
+
+    return res.json({ message: '자율 직접 입력 납품 신청이 접수되었습니다. 관리자가 확인 후 보상을 책정하여 지급합니다.', id: result.lastInsertRowid });
+  } else {
+    if (!supply_id || !amount) {
+      return res.status(400).json({ error: '모든 필수 항목(물품, 수량, 상자 위치)을 입력해주세요.' });
+    }
+
+    const result = db.prepare(`
+      INSERT INTO supply_requests (supply_id, is_custom, user_id, amount, chest_location, notes, proof_image, status)
+      VALUES (?, 0, ?, ?, ?, ?, ?, 'pending')
+    `).run(Number(supply_id), req.user.id, Number(amount), chest_location, notes || '', proof_image);
+
+    return res.json({ message: '납품 신청이 접수되었습니다.', id: result.lastInsertRowid });
+  }
 });
 
 app.put('/api/supplies/requests/:id/review', authenticateToken, requireRole('납품 관리'), (req, res) => {
-  const { status, admin_comment } = req.body;
+  const { status, admin_comment, custom_points, custom_credits } = req.body;
   if (!['approved', 'rejected'].includes(status)) {
     return res.status(400).json({ error: '올바른 승인/거절 상태를 지정하세요.' });
   }
 
   const reqItem = db.prepare(`
-    SELECT sr.*, s.points_per_unit, s.credits_per_unit
+    SELECT sr.*,
+           COALESCE(s.name, sr.custom_item_name, '자율 납품') as supply_name,
+           COALESCE(s.unit, sr.custom_unit, '개') as unit,
+           COALESCE(s.points_per_unit, 0) as points_per_unit,
+           COALESCE(s.credits_per_unit, 0) as credits_per_unit
     FROM supply_requests sr
-    JOIN supplies s ON sr.supply_id = s.id
+    LEFT JOIN supplies s ON sr.supply_id = s.id
     WHERE sr.id = ?
   `).get(req.params.id);
 
@@ -502,14 +860,57 @@ app.put('/api/supplies/requests/:id/review', authenticateToken, requireRole('납
   let earnedCredits = 0;
 
   if (status === 'approved') {
-    earnedPoints = reqItem.amount * reqItem.points_per_unit;
-    earnedCredits = reqItem.amount * reqItem.credits_per_unit;
+    const pointMult = getNumericSetting('point_multiplier', 1.0);
+    const creditMult = getNumericSetting('credit_multiplier', 1.0);
 
+    if (custom_points !== undefined && custom_points !== null && custom_points !== '') {
+      earnedPoints = Math.round(Number(custom_points));
+    } else {
+      earnedPoints = Math.round(reqItem.amount * reqItem.points_per_unit * pointMult);
+    }
+
+    if (custom_credits !== undefined && custom_credits !== null && custom_credits !== '') {
+      earnedCredits = Math.round(Number(custom_credits));
+    } else {
+      earnedCredits = Math.round(reqItem.amount * reqItem.credits_per_unit * creditMult);
+    }
+
+    const beforeUser = db.prepare('SELECT points, credits FROM users WHERE id = ?').get(reqItem.user_id);
     db.prepare('UPDATE users SET points = points + ?, credits = credits + ? WHERE id = ?')
       .run(earnedPoints, earnedCredits, reqItem.user_id);
 
+    if (earnedPoints !== 0) {
+      recordAssetTransaction({
+        userId: reqItem.user_id,
+        assetType: 'POINT',
+        amount: earnedPoints,
+        category: reqItem.is_custom ? '자율 물자 납품' : '물자 납품',
+        description: `[납품 승인 #${reqItem.id}] ${reqItem.supply_name} (${reqItem.amount}${reqItem.unit}) 보상 지급`,
+        referenceType: 'supply_request',
+        referenceId: reqItem.id,
+        actor: req.user,
+        balanceBefore: beforeUser?.points || 0,
+        balanceAfter: (beforeUser?.points || 0) + earnedPoints
+      });
+    }
+
+    if (earnedCredits !== 0) {
+      recordAssetTransaction({
+        userId: reqItem.user_id,
+        assetType: 'CREDIT',
+        amount: earnedCredits,
+        category: reqItem.is_custom ? '자율 물자 납품' : '물자 납품',
+        description: `[납품 승인 #${reqItem.id}] ${reqItem.supply_name} (${reqItem.amount}${reqItem.unit}) 크레딧 지급`,
+        referenceType: 'supply_request',
+        referenceId: reqItem.id,
+        actor: req.user,
+        balanceBefore: beforeUser?.credits || 0,
+        balanceAfter: (beforeUser?.credits || 0) + earnedCredits
+      });
+    }
+
     const activeSeason = db.prepare('SELECT id FROM seasons WHERE is_active = 1 LIMIT 1').get();
-    if (activeSeason) {
+    if (activeSeason && earnedPoints !== 0) {
       db.prepare(`
         INSERT INTO user_season_points (season_id, user_id, points)
         VALUES (?, ?, ?)
@@ -524,34 +925,537 @@ app.put('/api/supplies/requests/:id/review', authenticateToken, requireRole('납
     WHERE id = ?
   `).run(status, admin_comment || '', earnedPoints, earnedCredits, req.user.id, req.params.id);
 
-  res.json({ message: `납품 신청이 ${status === 'approved' ? '승인' : '거절'}되었습니다.` });
+  res.json({ message: `납품 신청이 ${status === 'approved' ? `승인 (+${earnedPoints}P, +${earnedCredits.toLocaleString()}C)` : '거절'}되었습니다.` });
 });
 
-// --- 랭킹 & 시즌 ---
+// 이미 처리된 납품 신청 내역도 사후 수치 수정 가능 ('납품 관리' 권한)
+app.put('/api/supplies/requests/:id/edit', authenticateToken, requireRole('납품 관리'), (req, res) => {
+  const { amount, chest_location, custom_item_name, points_earned, credits_earned, admin_comment } = req.body;
+  const reqItem = db.prepare('SELECT * FROM supply_requests WHERE id = ?').get(req.params.id);
+  if (!reqItem) return res.status(404).json({ error: '납품 신청 내역을 찾을 수 없습니다.' });
+
+  const newPoints = points_earned !== undefined ? Number(points_earned) : reqItem.points_earned;
+  const newCredits = credits_earned !== undefined ? Number(credits_earned) : reqItem.credits_earned;
+  const diffPoints = newPoints - (reqItem.points_earned || 0);
+  const diffCredits = newCredits - (reqItem.credits_earned || 0);
+
+  if (reqItem.status === 'approved' && (diffPoints !== 0 || diffCredits !== 0)) {
+    const beforeUser = db.prepare('SELECT points, credits FROM users WHERE id = ?').get(reqItem.user_id);
+    db.prepare('UPDATE users SET points = points + ?, credits = credits + ? WHERE id = ?')
+      .run(diffPoints, diffCredits, reqItem.user_id);
+
+    if (diffPoints !== 0) {
+      recordAssetTransaction({
+        userId: reqItem.user_id,
+        assetType: 'POINT',
+        amount: diffPoints,
+        category: '납품 보상 정정',
+        description: `[납품 내역 #${reqItem.id} 수치 정정] 기존 ${reqItem.points_earned}P → ${newPoints}P`,
+        referenceType: 'supply_request',
+        referenceId: reqItem.id,
+        actor: req.user,
+        balanceBefore: beforeUser?.points || 0,
+        balanceAfter: (beforeUser?.points || 0) + diffPoints
+      });
+      const activeSeason = db.prepare('SELECT id FROM seasons WHERE is_active = 1 LIMIT 1').get();
+      if (activeSeason) {
+        db.prepare(`
+          INSERT INTO user_season_points (season_id, user_id, points)
+          VALUES (?, ?, ?)
+          ON CONFLICT(season_id, user_id) DO UPDATE SET points = points + excluded.points
+        `).run(activeSeason.id, reqItem.user_id, diffPoints);
+      }
+    }
+    if (diffCredits !== 0) {
+      recordAssetTransaction({
+        userId: reqItem.user_id,
+        assetType: 'CREDIT',
+        amount: diffCredits,
+        category: '납품 보상 정정',
+        description: `[납품 내역 #${reqItem.id} 수치 정정] 기존 ${reqItem.credits_earned}C → ${newCredits}C`,
+        referenceType: 'supply_request',
+        referenceId: reqItem.id,
+        actor: req.user,
+        balanceBefore: beforeUser?.credits || 0,
+        balanceAfter: (beforeUser?.credits || 0) + diffCredits
+      });
+    }
+  }
+
+  db.prepare(`
+    UPDATE supply_requests
+    SET amount = ?, chest_location = ?, custom_item_name = COALESCE(?, custom_item_name),
+        points_earned = ?, credits_earned = ?, admin_comment = ?
+    WHERE id = ?
+  `).run(
+    amount !== undefined ? Number(amount) : reqItem.amount,
+    chest_location ?? reqItem.chest_location,
+    custom_item_name ?? null,
+    newPoints,
+    newCredits,
+    admin_comment ?? reqItem.admin_comment,
+    req.params.id
+  );
+
+  res.json({ message: '납품 기록 및 지급 수치가 수정되었습니다.' });
+});
+
+// --- 랭킹 & 시즌 & 랭킹 관리자 ---
+app.get('/api/ranking/tiers', authenticateToken, (req, res) => {
+  const tiers = db.prepare('SELECT * FROM ranking_tiers ORDER BY min_points DESC, sort_order ASC').all();
+  res.json(tiers);
+});
+
+app.post('/api/ranking/tiers', authenticateToken, requireRole(['랭킹 관리자', '시즌 관리']), (req, res) => {
+  const { name, min_points, badge_color, icon_emoji, perk_description, sort_order } = req.body;
+  if (!name || min_points === undefined) return res.status(400).json({ error: '티어 이름과 최소 필요 포인트를 입력해주세요.' });
+
+  const result = db.prepare(`
+    INSERT INTO ranking_tiers (name, min_points, badge_color, icon_emoji, perk_description, sort_order)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(name, Number(min_points) || 0, badge_color || '#3b82f6', icon_emoji || '⚔️', perk_description || '', Number(sort_order) || 0);
+
+  res.json({ message: '새로운 랭킹 계급(티어)이 추가되었습니다.', id: result.lastInsertRowid });
+});
+
+app.put('/api/ranking/tiers/:id', authenticateToken, requireRole(['랭킹 관리자', '시즌 관리']), (req, res) => {
+  const { name, min_points, badge_color, icon_emoji, perk_description, sort_order } = req.body;
+  db.prepare(`
+    UPDATE ranking_tiers
+    SET name = ?, min_points = ?, badge_color = ?, icon_emoji = ?, perk_description = ?, sort_order = ?
+    WHERE id = ?
+  `).run(name, Number(min_points) || 0, badge_color || '#3b82f6', icon_emoji || '⚔️', perk_description || '', Number(sort_order) || 0, req.params.id);
+
+  res.json({ message: '랭킹 계급(티어) 정보가 수정되었습니다.' });
+});
+
+app.delete('/api/ranking/tiers/:id', authenticateToken, requireRole(['랭킹 관리자', '시즌 관리']), (req, res) => {
+  db.prepare('DELETE FROM ranking_tiers WHERE id = ?').run(req.params.id);
+  res.json({ message: '랭킹 계급(티어)이 삭제되었습니다.' });
+});
+
+app.get('/api/ranking/config', authenticateToken, (req, res) => {
+  const keys = ['ranking_board_notice', 'ranking_show_credit_tab', 'ranking_top_limit', 'point_multiplier', 'credit_multiplier'];
+  const rows = db.prepare(`SELECT key, value FROM settings WHERE key IN ('ranking_board_notice', 'ranking_show_credit_tab', 'ranking_top_limit', 'point_multiplier', 'credit_multiplier')`).all();
+  const cfg = {
+    ranking_board_notice: '이번 시즌도 함께 국가를 키워가요! 납품·퀘스트·알바 하나하나가 모두 기여도로 기록됩니다.',
+    ranking_show_credit_tab: '1',
+    ranking_top_limit: '100',
+    point_multiplier: '1.0',
+    credit_multiplier: '1.0'
+  };
+  rows.forEach(r => { cfg[r.key] = r.value; });
+  res.json(cfg);
+});
+
+app.put('/api/ranking/config', authenticateToken, requireRole(['랭킹 관리자', '시즌 관리']), (req, res) => {
+  const allowed = ['ranking_board_notice', 'ranking_show_credit_tab', 'ranking_top_limit', 'point_multiplier', 'credit_multiplier'];
+  const stmt = db.prepare(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`);
+  for (const k of allowed) {
+    if (req.body[k] !== undefined) {
+      stmt.run(k, String(req.body[k]));
+    }
+  }
+  res.json({ message: '랭킹 보드 및 배율 설정이 저장되었습니다.' });
+});
+
 app.get('/api/ranking', authenticateToken, (req, res) => {
-  const { season_id } = req.query;
+  const { season_id, include_hidden, sort_by } = req.query;
+  const canManageRanking = req.user.is_admin === 1 || req.user.roleList.includes('랭킹 관리자') || req.user.roleList.includes('시즌 관리');
+  const showHidden = canManageRanking && (include_hidden === '1' || include_hidden === 'true');
+  const topLimit = Math.max(10, Math.min(500, getNumericSetting('ranking_top_limit', 100)));
+
   let ranking;
 
   if (season_id && season_id !== 'all') {
+    const sid = Number(season_id);
     ranking = db.prepare(`
-      SELECT u.id, u.username, u.nickname, COALESCE(usp.points, 0) as points
+      SELECT
+        u.id, u.username, u.nickname, u.credits,
+        u.points as total_points_all_time,
+        COALESCE(NULLIF(usp.custom_title, ''), u.custom_title, '') as custom_title,
+        COALESCE(usp.points, 0) as base_points,
+        COALESCE(usp.bonus_points, 0) as bonus_points,
+        (COALESCE(usp.points, 0) + COALESCE(usp.bonus_points, 0)) as points,
+        COALESCE(usp.admin_memo, '') as admin_memo,
+        COALESCE(usp.is_hidden, 0) as is_hidden,
+        (SELECT COUNT(*) FROM supply_requests sr WHERE sr.user_id = u.id AND sr.status = 'approved') as supply_count,
+        (SELECT COUNT(*) FROM quest_submissions qs WHERE qs.user_id = u.id AND qs.status = 'approved') as quest_count,
+        (SELECT COUNT(*) FROM part_time_jobs pj WHERE pj.worker_id = u.id AND pj.status = 'completed') as job_count
       FROM users u
       LEFT JOIN user_season_points usp ON u.id = usp.user_id AND usp.season_id = ?
       WHERE u.status = 'approved'
-      ORDER BY points DESC, u.id ASC
-      LIMIT 100
-    `).all(Number(season_id));
+        AND (? = 1 OR COALESCE(usp.is_hidden, 0) = 0)
+      ORDER BY ${sort_by === 'credits' ? 'u.credits DESC, points DESC' : 'points DESC, u.credits DESC'}, u.id ASC
+      LIMIT ?
+    `).all(sid, showHidden ? 1 : 0, topLimit);
   } else {
+    const activeSeason = db.prepare('SELECT id FROM seasons WHERE is_active = 1 LIMIT 1').get();
+    const activeSid = activeSeason ? activeSeason.id : -1;
     ranking = db.prepare(`
-      SELECT id, username, nickname, points
-      FROM users
-      WHERE status = 'approved'
-      ORDER BY points DESC, id ASC
-      LIMIT 100
-    `).all();
+      SELECT
+        u.id, u.username, u.nickname, u.credits,
+        u.points as base_points,
+        COALESCE(usp.bonus_points, 0) as bonus_points,
+        (u.points + COALESCE(usp.bonus_points, 0)) as points,
+        COALESCE(NULLIF(usp.custom_title, ''), u.custom_title, '') as custom_title,
+        COALESCE(usp.admin_memo, '') as admin_memo,
+        COALESCE(usp.is_hidden, 0) as is_hidden,
+        (SELECT COUNT(*) FROM supply_requests sr WHERE sr.user_id = u.id AND sr.status = 'approved') as supply_count,
+        (SELECT COUNT(*) FROM quest_submissions qs WHERE qs.user_id = u.id AND qs.status = 'approved') as quest_count,
+        (SELECT COUNT(*) FROM part_time_jobs pj WHERE pj.worker_id = u.id AND pj.status = 'completed') as job_count
+      FROM users u
+      LEFT JOIN user_season_points usp ON u.id = usp.user_id AND usp.season_id = ?
+      WHERE u.status = 'approved'
+        AND (? = 1 OR COALESCE(usp.is_hidden, 0) = 0)
+      ORDER BY ${sort_by === 'credits' ? 'u.credits DESC, points DESC' : 'points DESC, u.credits DESC'}, u.id ASC
+      LIMIT ?
+    `).all(activeSid, showHidden ? 1 : 0, topLimit);
   }
 
-  res.json(ranking);
+  const enriched = ranking.map(r => ({
+    ...r,
+    roles: getUserAccess(r.id).roles
+  }));
+
+  res.json(enriched);
+});
+
+// 나의 랭킹 요약: 남과의 격차 대신 "내 위치와 내 성장"을 보여주기 위한 개인 지표
+app.get('/api/ranking/me', authenticateToken, (req, res) => {
+  const { season_id } = req.query;
+  const activeSeason = db.prepare('SELECT id FROM seasons WHERE is_active = 1 LIMIT 1').get();
+  const isSeason = season_id && season_id !== 'all';
+  const sid = isSeason ? Number(season_id) : (activeSeason ? activeSeason.id : -1);
+
+  const pointsExpr = isSeason
+    ? '(COALESCE(usp.points, 0) + COALESCE(usp.bonus_points, 0))'
+    : '(u.points + COALESCE(usp.bonus_points, 0))';
+
+  const rows = db.prepare(`
+    SELECT u.id, ${pointsExpr} as pts
+    FROM users u
+    LEFT JOIN user_season_points usp ON u.id = usp.user_id AND usp.season_id = ?
+    WHERE u.status = 'approved' AND COALESCE(usp.is_hidden, 0) = 0
+  `).all(sid);
+
+  const mine = rows.find(r => r.id === req.user.id);
+  const myPoints = mine ? mine.pts : 0;
+  const participants = rows.filter(r => r.pts > 0).length;
+  const totalPoints = rows.reduce((acc, r) => acc + Math.max(0, r.pts), 0);
+  const rank = mine && myPoints > 0 ? rows.filter(r => r.pts > myPoints).length + 1 : null;
+
+  const weekly = db.prepare(`
+    SELECT COALESCE(SUM(amount), 0) as s FROM asset_transactions
+    WHERE user_id = ? AND asset_type = 'POINT' AND tx_type = 'IN' AND created_at >= datetime('now', '-7 day')
+  `).get(req.user.id).s;
+
+  const counts = db.prepare(`
+    SELECT
+      (SELECT COUNT(*) FROM supply_requests WHERE user_id = ? AND status = 'approved') as supply_count,
+      (SELECT COUNT(*) FROM quest_submissions WHERE user_id = ? AND status = 'approved') as quest_count,
+      (SELECT COUNT(*) FROM part_time_jobs WHERE worker_id = ? AND status = 'completed') as job_count
+  `).get(req.user.id, req.user.id, req.user.id);
+
+  res.json({
+    points: myPoints,
+    rank,
+    participants,
+    top_percent: rank && participants > 0 ? Math.max(1, Math.ceil((rank / participants) * 100)) : null,
+    contribution_percent: totalPoints > 0 ? Math.round((Math.max(0, myPoints) / totalPoints) * 1000) / 10 : 0,
+    total_points: totalPoints,
+    weekly_points: weekly,
+    ...counts
+  });
+});
+
+// 랭킹 초기화 기능 ('랭킹 관리자', '시즌 관리', 또는 슈퍼관리자)
+app.post('/api/ranking/reset', authenticateToken, requireRole(['랭킹 관리자', '시즌 관리']), (req, res) => {
+  const {
+    scope = 'season', // 'season' | 'all_seasons' | 'total_points' | 'credits' | 'everything'
+    season_id,
+    create_new_season = false,
+    new_season_name = '',
+    reason = ''
+  } = req.body;
+
+  const activeSeason = db.prepare('SELECT * FROM seasons WHERE is_active = 1 LIMIT 1').get();
+  const targetSeasonId = season_id && season_id !== 'all' ? Number(season_id) : (activeSeason ? activeSeason.id : null);
+
+  db.exec('BEGIN TRANSACTION;');
+  try {
+    if (scope === 'season' && targetSeasonId) {
+      db.prepare('UPDATE user_season_points SET points = 0, bonus_points = 0 WHERE season_id = ?').run(targetSeasonId);
+    } else if (scope === 'all_seasons') {
+      db.prepare('UPDATE user_season_points SET points = 0, bonus_points = 0').run();
+    } else if (scope === 'total_points') {
+      const allUsers = db.prepare('SELECT id, points FROM users WHERE points != 0').all();
+      for (const u of allUsers) {
+        recordAssetTransaction({
+          userId: u.id,
+          assetType: 'POINT',
+          amount: -u.points,
+          category: '랭킹/포인트 전체 초기화',
+          description: reason ? `[초기화] ${reason}` : `랭킹 관리자에 의한 연방 포인트 일괄 초기화`,
+          actor: req.user,
+          balanceBefore: u.points,
+          balanceAfter: 0
+        });
+      }
+      db.prepare('UPDATE users SET points = 0').run();
+      if (targetSeasonId) {
+        db.prepare('UPDATE user_season_points SET points = 0, bonus_points = 0 WHERE season_id = ?').run(targetSeasonId);
+      }
+    } else if (scope === 'credits') {
+      const allUsers = db.prepare('SELECT id, credits FROM users WHERE credits != 0').all();
+      for (const u of allUsers) {
+        recordAssetTransaction({
+          userId: u.id,
+          assetType: 'CREDIT',
+          amount: -u.credits,
+          category: '크레딧 전체 초기화',
+          description: reason ? `[초기화] ${reason}` : `랭킹 관리자에 의한 크레딧 일괄 초기화`,
+          actor: req.user,
+          balanceBefore: u.credits,
+          balanceAfter: 0
+        });
+      }
+      db.prepare('UPDATE users SET credits = 0').run();
+    } else if (scope === 'everything') {
+      const allUsers = db.prepare('SELECT id, points, credits FROM users').all();
+      for (const u of allUsers) {
+        if (u.points !== 0) {
+          recordAssetTransaction({
+            userId: u.id,
+            assetType: 'POINT',
+            amount: -u.points,
+            category: '전체 시즌/재화 통합 초기화',
+            description: reason ? `[전체 초기화] ${reason}` : `랭킹 관리자에 의한 전체 시즌/포인트 통합 초기화`,
+            actor: req.user,
+            balanceBefore: u.points,
+            balanceAfter: 0
+          });
+        }
+        if (u.credits !== 0) {
+          recordAssetTransaction({
+            userId: u.id,
+            assetType: 'CREDIT',
+            amount: -u.credits,
+            category: '전체 시즌/재화 통합 초기화',
+            description: reason ? `[전체 초기화] ${reason}` : `랭킹 관리자에 의한 전체 시즌/크레딧 통합 초기화`,
+            actor: req.user,
+            balanceBefore: u.credits,
+            balanceAfter: 0
+          });
+        }
+      }
+      db.prepare('UPDATE users SET points = 0, credits = 0').run();
+      db.prepare('UPDATE user_season_points SET points = 0, bonus_points = 0').run();
+    }
+
+    let createdSeasonId = null;
+    if (create_new_season && new_season_name.trim()) {
+      db.prepare('UPDATE seasons SET is_active = 0').run();
+      const sRes = db.prepare(`
+        INSERT INTO seasons (name, start_date, end_date, reward_description, target_points, is_active)
+        VALUES (?, date('now'), date('now', '+30 day'), '시즌 1~3위 특별 보상 지급', 10000, 1)
+      `).run(new_season_name.trim());
+      createdSeasonId = sRes.lastInsertRowid;
+    }
+
+    db.exec('COMMIT;');
+    res.json({
+      message: '선택한 범위의 랭킹 및 수치 초기화가 완료되었습니다.',
+      createdSeasonId
+    });
+  } catch (err) {
+    db.exec('ROLLBACK;');
+    res.status(500).json({ error: `랭킹 초기화 중 오류 발생: ${err.message}` });
+  }
+});
+
+// 랭킹 관리자: 특정 플레이어의 랭킹 세부 수치/칭호/보너스/노출여부 정밀 수정
+app.put('/api/ranking/users/:userId', authenticateToken, requireRole(['랭킹 관리자', '시즌 관리']), (req, res) => {
+  const userId = Number(req.params.userId);
+  const {
+    season_id,
+    season_points,
+    bonus_points,
+    total_points,
+    credits,
+    custom_title,
+    admin_memo,
+    is_hidden,
+    reason
+  } = req.body;
+
+  const targetUser = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+  if (!targetUser) return res.status(404).json({ error: '플레이어를 찾을 수 없습니다.' });
+
+  const activeSeason = db.prepare('SELECT id FROM seasons WHERE is_active = 1 LIMIT 1').get();
+  const targetSeasonId = (season_id && season_id !== 'all') ? Number(season_id) : (activeSeason ? activeSeason.id : null);
+
+  db.exec('BEGIN TRANSACTION;');
+  try {
+    if (total_points !== undefined && total_points !== null && total_points !== '') {
+      const newTotalPts = Number(total_points);
+      const diffPts = newTotalPts - (targetUser.points || 0);
+      if (diffPts !== 0) {
+        db.prepare('UPDATE users SET points = ? WHERE id = ?').run(newTotalPts, userId);
+        recordAssetTransaction({
+          userId,
+          assetType: 'POINT',
+          amount: diffPts,
+          category: '랭킹 관리자 정밀 수정',
+          description: reason ? `[랭킹 정밀 조정] ${reason}` : `랭킹 관리자(${req.user.nickname || req.user.username})가 누적 연방 포인트 조정`,
+          referenceType: 'ranking_admin',
+          referenceId: userId,
+          actor: req.user,
+          balanceBefore: targetUser.points || 0,
+          balanceAfter: newTotalPts
+        });
+      }
+    }
+
+    if (credits !== undefined && credits !== null && credits !== '') {
+      const newCredits = Number(credits);
+      const diffCreds = newCredits - (targetUser.credits || 0);
+      if (diffCreds !== 0) {
+        db.prepare('UPDATE users SET credits = ? WHERE id = ?').run(newCredits, userId);
+        recordAssetTransaction({
+          userId,
+          assetType: 'CREDIT',
+          amount: diffCreds,
+          category: '랭킹 관리자 정밀 수정',
+          description: reason ? `[랭킹 정밀 조정] ${reason}` : `랭킹 관리자(${req.user.nickname || req.user.username})가 보유 크레딧 조정`,
+          referenceType: 'ranking_admin',
+          referenceId: userId,
+          actor: req.user,
+          balanceBefore: targetUser.credits || 0,
+          balanceAfter: newCredits
+        });
+      }
+    }
+
+    if (custom_title !== undefined) {
+      db.prepare('UPDATE users SET custom_title = ? WHERE id = ?').run(custom_title, userId);
+    }
+
+    if (targetSeasonId) {
+      const existingUsp = db.prepare('SELECT * FROM user_season_points WHERE season_id = ? AND user_id = ?').get(targetSeasonId, userId);
+      const nextPts = season_points !== undefined && season_points !== '' ? Number(season_points) : (existingUsp ? existingUsp.points : (targetUser.points || 0));
+      const nextBonus = bonus_points !== undefined && bonus_points !== '' ? Number(bonus_points) : (existingUsp ? existingUsp.bonus_points : 0);
+      const nextTitle = custom_title !== undefined ? custom_title : (existingUsp ? existingUsp.custom_title : '');
+      const nextMemo = admin_memo !== undefined ? admin_memo : (existingUsp ? existingUsp.admin_memo : '');
+      const nextHidden = is_hidden !== undefined ? (is_hidden ? 1 : 0) : (existingUsp ? existingUsp.is_hidden : 0);
+
+      db.prepare(`
+        INSERT INTO user_season_points (season_id, user_id, points, bonus_points, custom_title, admin_memo, is_hidden)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(season_id, user_id) DO UPDATE SET
+          points = excluded.points,
+          bonus_points = excluded.bonus_points,
+          custom_title = excluded.custom_title,
+          admin_memo = excluded.admin_memo,
+          is_hidden = excluded.is_hidden
+      `).run(targetSeasonId, userId, nextPts, nextBonus, nextTitle, nextMemo, nextHidden);
+    }
+
+    db.exec('COMMIT;');
+    res.json({ message: `[${targetUser.nickname || targetUser.username}] 플레이어의 랭킹 세부 수치 및 설정이 업데이트되었습니다.` });
+  } catch (err) {
+    db.exec('ROLLBACK;');
+    res.status(500).json({ error: `랭킹 정보 수정 실패: ${err.message}` });
+  }
+});
+
+// 랭킹 관리자: 전체 또는 선택 플레이어 일괄 보너스/배율/가감 적용
+app.post('/api/ranking/bulk-adjust', authenticateToken, requireRole(['랭킹 관리자', '시즌 관리']), (req, res) => {
+  const {
+    season_id,
+    action_type, // 'add_season_points' | 'add_bonus_points' | 'multiply_season_points' | 'add_total_points' | 'add_credits'
+    value,
+    reason = ''
+  } = req.body;
+
+  const numVal = Number(value);
+  if (isNaN(numVal)) return res.status(400).json({ error: '유효한 수치를 입력해주세요.' });
+
+  const activeSeason = db.prepare('SELECT id FROM seasons WHERE is_active = 1 LIMIT 1').get();
+  const targetSeasonId = (season_id && season_id !== 'all') ? Number(season_id) : (activeSeason ? activeSeason.id : null);
+
+  db.exec('BEGIN TRANSACTION;');
+  try {
+    const approvedUsers = db.prepare("SELECT id, points, credits FROM users WHERE status = 'approved'").all();
+
+    if (action_type === 'add_season_points' && targetSeasonId) {
+      for (const u of approvedUsers) {
+        db.prepare(`
+          INSERT INTO user_season_points (season_id, user_id, points)
+          VALUES (?, ?, MAX(0, ?))
+          ON CONFLICT(season_id, user_id) DO UPDATE SET points = MAX(0, points + ?)
+        `).run(targetSeasonId, u.id, numVal, numVal);
+      }
+    } else if (action_type === 'add_bonus_points' && targetSeasonId) {
+      for (const u of approvedUsers) {
+        db.prepare(`
+          INSERT INTO user_season_points (season_id, user_id, points, bonus_points)
+          VALUES (?, ?, 0, ?)
+          ON CONFLICT(season_id, user_id) DO UPDATE SET bonus_points = bonus_points + ?
+        `).run(targetSeasonId, u.id, numVal, numVal);
+      }
+    } else if (action_type === 'multiply_season_points' && targetSeasonId) {
+      db.prepare(`
+        UPDATE user_season_points
+        SET points = CAST(ROUND(points * ?) AS INTEGER)
+        WHERE season_id = ?
+      `).run(numVal, targetSeasonId);
+    } else if (action_type === 'add_total_points') {
+      for (const u of approvedUsers) {
+        const nextPts = Math.max(0, (u.points || 0) + numVal);
+        const diff = nextPts - (u.points || 0);
+        db.prepare('UPDATE users SET points = ? WHERE id = ?').run(nextPts, u.id);
+        if (diff !== 0) {
+          recordAssetTransaction({
+            userId: u.id,
+            assetType: 'POINT',
+            amount: diff,
+            category: '일괄 포인트 조정',
+            description: reason ? `[전체 일괄 조정] ${reason}` : `랭킹 관리자에 의한 전체 플레이어 포인트 일괄 증감`,
+            actor: req.user,
+            balanceBefore: u.points || 0,
+            balanceAfter: nextPts
+          });
+        }
+      }
+    } else if (action_type === 'add_credits') {
+      for (const u of approvedUsers) {
+        const nextCreds = Math.max(0, (u.credits || 0) + numVal);
+        const diff = nextCreds - (u.credits || 0);
+        db.prepare('UPDATE users SET credits = ? WHERE id = ?').run(nextCreds, u.id);
+        if (diff !== 0) {
+          recordAssetTransaction({
+            userId: u.id,
+            assetType: 'CREDIT',
+            amount: diff,
+            category: '일괄 크레딧 조정',
+            description: reason ? `[전체 일괄 조정] ${reason}` : `랭킹 관리자에 의한 전체 플레이어 크레딧 일괄 증감`,
+            actor: req.user,
+            balanceBefore: u.credits || 0,
+            balanceAfter: nextCreds
+          });
+        }
+      }
+    } else {
+      throw new Error('올바른 일괄 작업 유형을 선택해주세요.');
+    }
+
+    db.exec('COMMIT;');
+    res.json({ message: '전체 플레이어 대상 일괄 수치 조정이 완료되었습니다.' });
+  } catch (err) {
+    db.exec('ROLLBACK;');
+    res.status(400).json({ error: err.message });
+  }
 });
 
 app.get('/api/seasons', authenticateToken, (req, res) => {
@@ -559,19 +1463,40 @@ app.get('/api/seasons', authenticateToken, (req, res) => {
   res.json(seasons);
 });
 
-app.post('/api/seasons', authenticateToken, requireAdmin, (req, res) => {
-  const { name, start_date, end_date } = req.body;
+app.post('/api/seasons', authenticateToken, requireRole(['시즌 관리', '랭킹 관리자']), (req, res) => {
+  const { name, start_date, end_date, reward_description, target_points } = req.body;
   if (!name) return res.status(400).json({ error: '시즌 이름을 입력해주세요.' });
 
   const result = db.prepare(`
-    INSERT INTO seasons (name, start_date, end_date, is_active)
-    VALUES (?, ?, ?, 0)
-  `).run(name, start_date || null, end_date || null);
+    INSERT INTO seasons (name, start_date, end_date, reward_description, target_points, is_active)
+    VALUES (?, ?, ?, ?, ?, 0)
+  `).run(name, start_date || null, end_date || null, reward_description || '', Number(target_points) || 10000);
 
   res.json({ message: '시즌이 추가되었습니다.', id: result.lastInsertRowid });
 });
 
-app.put('/api/seasons/:id/activate', authenticateToken, requireAdmin, (req, res) => {
+app.put('/api/seasons/:id', authenticateToken, requireRole(['시즌 관리', '랭킹 관리자']), (req, res) => {
+  const { name, start_date, end_date, reward_description, target_points } = req.body;
+  if (!name) return res.status(400).json({ error: '시즌 이름을 입력해주세요.' });
+
+  db.prepare(`
+    UPDATE seasons
+    SET name = ?, start_date = ?, end_date = ?, reward_description = ?, target_points = ?
+    WHERE id = ?
+  `).run(name, start_date || null, end_date || null, reward_description || '', Number(target_points) || 10000, req.params.id);
+
+  res.json({ message: '시즌 상세 정보 및 목표 수치가 수정되었습니다.' });
+});
+
+app.delete('/api/seasons/:id', authenticateToken, requireRole(['시즌 관리', '랭킹 관리자']), (req, res) => {
+  const target = db.prepare('SELECT * FROM seasons WHERE id = ?').get(req.params.id);
+  if (!target) return res.status(404).json({ error: '시즌을 찾을 수 없습니다.' });
+
+  db.prepare('DELETE FROM seasons WHERE id = ?').run(req.params.id);
+  res.json({ message: '시즌이 삭제되었습니다.' });
+});
+
+app.put('/api/seasons/:id/activate', authenticateToken, requireRole(['시즌 관리', '랭킹 관리자']), (req, res) => {
   db.prepare('UPDATE seasons SET is_active = 0').run();
   db.prepare('UPDATE seasons SET is_active = 1 WHERE id = ?').run(req.params.id);
   res.json({ message: '선택한 시즌이 활성화되었습니다.' });
@@ -619,6 +1544,7 @@ app.post('/api/shop/purchase', authenticateToken, (req, res) => {
   if (item.stock === 0) return res.status(400).json({ error: '품절된 상품입니다.' });
   if (req.user.points < item.price) return res.status(400).json({ error: '연방 포인트가 부족합니다.' });
 
+  const beforePts = req.user.points || 0;
   db.prepare('UPDATE users SET points = points - ? WHERE id = ?').run(item.price, req.user.id);
   if (item.stock > 0) {
     db.prepare('UPDATE shop_items SET stock = stock - 1 WHERE id = ?').run(item.id);
@@ -628,6 +1554,19 @@ app.post('/api/shop/purchase', authenticateToken, (req, res) => {
     INSERT INTO shop_orders (user_id, item_id, item_name, points_spent, status)
     VALUES (?, ?, ?, ?, 'pending')
   `).run(req.user.id, item.id, item.name, item.price);
+
+  recordAssetTransaction({
+    userId: req.user.id,
+    assetType: 'POINT',
+    amount: -item.price,
+    category: '포인트 상점 구매',
+    description: `[상점 주문 #${result.lastInsertRowid}] '${item.name}' 아이템 구매`,
+    referenceType: 'shop_order',
+    referenceId: result.lastInsertRowid,
+    actor: req.user,
+    balanceBefore: beforePts,
+    balanceAfter: beforePts - item.price
+  });
 
   res.json({ message: '구매 신청이 완료되었습니다.', order_id: result.lastInsertRowid });
 });
@@ -655,6 +1594,29 @@ app.get('/api/shop/orders', authenticateToken, (req, res) => {
 });
 
 app.put('/api/shop/orders/:id/deliver', authenticateToken, requireRole('샵 관리'), (req, res) => {
+  const { status = 'delivered' } = req.body || {};
+  const order = db.prepare('SELECT * FROM shop_orders WHERE id = ?').get(req.params.id);
+  if (!order) return res.status(404).json({ error: '주문 내역을 찾을 수 없습니다.' });
+
+  if (status === 'cancelled' && order.status !== 'cancelled') {
+    const u = db.prepare('SELECT points FROM users WHERE id = ?').get(order.user_id);
+    db.prepare('UPDATE users SET points = points + ? WHERE id = ?').run(order.points_spent, order.user_id);
+    recordAssetTransaction({
+      userId: order.user_id,
+      assetType: 'POINT',
+      amount: order.points_spent,
+      category: '포인트 상점 환불',
+      description: `[상점 주문 #${order.id} 취소] '${order.item_name}' 포인트 환불`,
+      referenceType: 'shop_order',
+      referenceId: order.id,
+      actor: req.user,
+      balanceBefore: u?.points || 0,
+      balanceAfter: (u?.points || 0) + order.points_spent
+    });
+    db.prepare("UPDATE shop_orders SET status = 'cancelled' WHERE id = ?").run(req.params.id);
+    return res.json({ message: '주문이 취소되었으며 포인트가 환불되었습니다.' });
+  }
+
   db.prepare("UPDATE shop_orders SET status = 'delivered' WHERE id = ?").run(req.params.id);
   res.json({ message: '상품 수령/지급 처리가 완료되었습니다.' });
 });
@@ -767,28 +1729,115 @@ app.post('/api/jobs/:id/complete', authenticateToken, (req, res) => {
   });
 });
 
+app.put('/api/jobs/:id', authenticateToken, requireRole(['사업가', '기업 관리']), (req, res) => {
+  const { work_type, custom_work_type, description, pay_credit, federation_points, work_date, duration_text, notes, status } = req.body;
+  const job = db.prepare('SELECT * FROM part_time_jobs WHERE id = ?').get(req.params.id);
+  if (!job) return res.status(404).json({ error: '알바 공고를 찾을 수 없습니다.' });
+
+  const canManageCorp = req.user.is_admin === 1 || req.user.roleList.includes('기업 관리');
+  if (!canManageCorp && job.employer_id !== req.user.id) {
+    return res.status(403).json({ error: '본인이 등록한 공고 또는 기업 관리자만 수정할 수 있습니다.' });
+  }
+
+  db.prepare(`
+    UPDATE part_time_jobs
+    SET work_type = ?, custom_work_type = ?, description = ?, pay_credit = ?,
+        federation_points = ?, work_date = ?, duration_text = ?, notes = ?, status = ?
+    WHERE id = ?
+  `).run(
+    work_type ?? job.work_type,
+    custom_work_type ?? job.custom_work_type,
+    description ?? job.description,
+    pay_credit !== undefined ? Number(pay_credit) : job.pay_credit,
+    canManageCorp && federation_points !== undefined ? Number(federation_points) : job.federation_points,
+    work_date ?? job.work_date,
+    duration_text ?? job.duration_text,
+    notes ?? job.notes,
+    canManageCorp && status ? status : job.status,
+    req.params.id
+  );
+
+  res.json({ message: '단기 알바 공고 및 보수/포인트 수치가 수정되었습니다.' });
+});
+
+app.delete('/api/jobs/:id', authenticateToken, requireRole(['사업가', '기업 관리']), (req, res) => {
+  const job = db.prepare('SELECT * FROM part_time_jobs WHERE id = ?').get(req.params.id);
+  if (!job) return res.status(404).json({ error: '알바 공고를 찾을 수 없습니다.' });
+
+  const canManageCorp = req.user.is_admin === 1 || req.user.roleList.includes('기업 관리');
+  if (!canManageCorp && job.employer_id !== req.user.id) {
+    return res.status(403).json({ error: '권한이 없습니다.' });
+  }
+
+  db.prepare('DELETE FROM part_time_jobs WHERE id = ?').run(req.params.id);
+  res.json({ message: '단기 알바 공고가 삭제되었습니다.' });
+});
+
 app.put('/api/jobs/:id/finalize', authenticateToken, requireRole('기업 관리'), (req, res) => {
-  const { decision } = req.body;
+  const { decision, custom_pay_credit, custom_federation_points } = req.body;
   const job = db.prepare('SELECT * FROM part_time_jobs WHERE id = ?').get(req.params.id);
   if (!job) return res.status(404).json({ error: '알바를 찾을 수 없습니다.' });
 
   if (decision === 'approve') {
+    const pointMult = getNumericSetting('point_multiplier', 1.0);
+    const creditMult = getNumericSetting('credit_multiplier', 1.0);
+
+    const finalPayCredit = (custom_pay_credit !== undefined && custom_pay_credit !== null && custom_pay_credit !== '')
+      ? Math.round(Number(custom_pay_credit))
+      : Math.round(job.pay_credit * creditMult);
+
+    const finalFedPoints = (custom_federation_points !== undefined && custom_federation_points !== null && custom_federation_points !== '')
+      ? Math.round(Number(custom_federation_points))
+      : Math.round(job.federation_points * pointMult);
+
     if (job.worker_id) {
+      const beforeWorker = db.prepare('SELECT points, credits FROM users WHERE id = ?').get(job.worker_id);
       db.prepare('UPDATE users SET credits = credits + ?, points = points + ? WHERE id = ?')
-        .run(job.pay_credit, job.federation_points, job.worker_id);
+        .run(finalPayCredit, finalFedPoints, job.worker_id);
+
+      if (finalFedPoints !== 0) {
+        recordAssetTransaction({
+          userId: job.worker_id,
+          assetType: 'POINT',
+          amount: finalFedPoints,
+          category: '단기 알바 완수',
+          description: `[단기 알바 #${job.id}] '${job.work_type}' 노동 완수 연방 포인트 지급`,
+          referenceType: 'part_time_job',
+          referenceId: job.id,
+          actor: req.user,
+          balanceBefore: beforeWorker?.points || 0,
+          balanceAfter: (beforeWorker?.points || 0) + finalFedPoints
+        });
+      }
+
+      if (finalPayCredit !== 0) {
+        recordAssetTransaction({
+          userId: job.worker_id,
+          assetType: 'CREDIT',
+          amount: finalPayCredit,
+          category: '단기 알바 보수',
+          description: `[단기 알바 #${job.id}] '${job.work_type}' 노동 완수 보수 지급`,
+          referenceType: 'part_time_job',
+          referenceId: job.id,
+          actor: req.user,
+          balanceBefore: beforeWorker?.credits || 0,
+          balanceAfter: (beforeWorker?.credits || 0) + finalPayCredit
+        });
+      }
 
       const activeSeason = db.prepare('SELECT id FROM seasons WHERE is_active = 1 LIMIT 1').get();
-      if (activeSeason && job.federation_points > 0) {
+      if (activeSeason && finalFedPoints !== 0) {
         db.prepare(`
           INSERT INTO user_season_points (season_id, user_id, points)
           VALUES (?, ?, ?)
           ON CONFLICT(season_id, user_id) DO UPDATE SET points = points + excluded.points
-        `).run(activeSeason.id, job.worker_id, job.federation_points);
+        `).run(activeSeason.id, job.worker_id, finalFedPoints);
       }
     }
 
-    db.prepare("UPDATE part_time_jobs SET status = 'completed' WHERE id = ?").run(req.params.id);
-    res.json({ message: '최종 승인 및 포인트/보수 지급이 완료되었습니다.' });
+    db.prepare("UPDATE part_time_jobs SET status = 'completed', pay_credit = ?, federation_points = ? WHERE id = ?")
+      .run(finalPayCredit, finalFedPoints, req.params.id);
+    res.json({ message: `최종 승인 및 포인트(+${finalFedPoints}P)/보수(+${finalPayCredit.toLocaleString()}C) 지급이 완료되었습니다.` });
   } else {
     db.prepare("UPDATE part_time_jobs SET status = 'cancelled' WHERE id = ?").run(req.params.id);
     res.json({ message: '알바가 거절/취소 처리되었습니다.' });
@@ -936,13 +1985,13 @@ app.post('/api/quests/:id/submit', authenticateToken, upload.single('proof_image
 });
 
 app.put('/api/quests/submissions/:id/review', authenticateToken, requireRole('퀘스트 관리'), (req, res) => {
-  const { status } = req.body;
+  const { status, admin_comment, custom_points, custom_credits } = req.body;
   if (!['approved', 'rejected'].includes(status)) {
     return res.status(400).json({ error: '올바른 승인/거절 상태를 지정하세요.' });
   }
 
   const sub = db.prepare(`
-    SELECT qs.*, q.point_reward, q.credit_reward
+    SELECT qs.*, q.title as quest_title, q.point_reward, q.credit_reward
     FROM quest_submissions qs
     JOIN quests q ON qs.quest_id = q.id
     WHERE qs.id = ?
@@ -951,30 +2000,98 @@ app.put('/api/quests/submissions/:id/review', authenticateToken, requireRole('�
   if (!sub) return res.status(404).json({ error: '신청 내역을 찾을 수 없습니다.' });
   if (sub.status !== 'pending') return res.status(400).json({ error: '이미 처리된 제출입니다.' });
 
+  let finalPoints = 0;
+  let finalCredits = 0;
+
   if (status === 'approved') {
+    const pointMult = getNumericSetting('point_multiplier', 1.0);
+    const creditMult = getNumericSetting('credit_multiplier', 1.0);
+
+    finalPoints = (custom_points !== undefined && custom_points !== null && custom_points !== '')
+      ? Math.round(Number(custom_points))
+      : Math.round(sub.point_reward * pointMult);
+
+    finalCredits = (custom_credits !== undefined && custom_credits !== null && custom_credits !== '')
+      ? Math.round(Number(custom_credits))
+      : Math.round(sub.credit_reward * creditMult);
+
+    const beforeUser = db.prepare('SELECT points, credits FROM users WHERE id = ?').get(sub.user_id);
     db.prepare('UPDATE users SET points = points + ?, credits = credits + ? WHERE id = ?')
-      .run(sub.point_reward, sub.credit_reward, sub.user_id);
+      .run(finalPoints, finalCredits, sub.user_id);
+
+    if (finalPoints !== 0) {
+      recordAssetTransaction({
+        userId: sub.user_id,
+        assetType: 'POINT',
+        amount: finalPoints,
+        category: '공통 퀘스트 완수',
+        description: `[퀘스트 승인 #${sub.id}] '${sub.quest_title}' 완수 연방 포인트 보상`,
+        referenceType: 'quest_submission',
+        referenceId: sub.id,
+        actor: req.user,
+        balanceBefore: beforeUser?.points || 0,
+        balanceAfter: (beforeUser?.points || 0) + finalPoints
+      });
+    }
+
+    if (finalCredits !== 0) {
+      recordAssetTransaction({
+        userId: sub.user_id,
+        assetType: 'CREDIT',
+        amount: finalCredits,
+        category: '공통 퀘스트 완수',
+        description: `[퀘스트 승인 #${sub.id}] '${sub.quest_title}' 완수 크레딧 보상`,
+        referenceType: 'quest_submission',
+        referenceId: sub.id,
+        actor: req.user,
+        balanceBefore: beforeUser?.credits || 0,
+        balanceAfter: (beforeUser?.credits || 0) + finalCredits
+      });
+    }
 
     const activeSeason = db.prepare('SELECT id FROM seasons WHERE is_active = 1 LIMIT 1').get();
-    if (activeSeason && sub.point_reward > 0) {
+    if (activeSeason && finalPoints !== 0) {
       db.prepare(`
         INSERT INTO user_season_points (season_id, user_id, points)
         VALUES (?, ?, ?)
         ON CONFLICT(season_id, user_id) DO UPDATE SET points = points + excluded.points
-      `).run(activeSeason.id, sub.user_id, sub.point_reward);
+      `).run(activeSeason.id, sub.user_id, finalPoints);
     }
   }
 
   db.prepare(`
     UPDATE quest_submissions
-    SET status = ?, reviewed_by = ?
+    SET status = ?, admin_comment = ?, custom_points = ?, custom_credits = ?, reviewed_by = ?
     WHERE id = ?
-  `).run(status, req.user.id, req.params.id);
+  `).run(status, admin_comment || '', finalPoints, finalCredits, req.user.id, req.params.id);
 
-  res.json({ message: `퀘스트 신청이 ${status === 'approved' ? '승인' : '거절'}되었습니다.` });
+  res.json({ message: `퀘스트 신청이 ${status === 'approved' ? `승인 (+${finalPoints}P, +${finalCredits.toLocaleString()}C)` : '거절'}되었습니다.` });
 });
 
-// --- 크레딧 환전 모듈 ---
+// --- 크레딧 환전 & 충전 모듈 ---
+app.get('/api/credits/config', authenticateToken, (req, res) => {
+  const rows = db.prepare(`SELECT key, value FROM settings WHERE key IN ('exchange_rate', 'min_exchange_amount', 'exchange_fee_percent', 'credit_charge_notice')`).all();
+  const cfg = {
+    exchange_rate: '1.0',
+    min_exchange_amount: '100',
+    exchange_fee_percent: '0',
+    credit_charge_notice: '인게임에서 국가 계좌로 송금하거나 납품/이벤트 보상으로 입금한 증빙 스크린샷과 일시를 첨부하여 크레딧 충전을 신청하세요.'
+  };
+  rows.forEach(r => { cfg[r.key] = r.value; });
+  res.json(cfg);
+});
+
+app.put('/api/credits/config', authenticateToken, requireRole('크레딧 관리'), (req, res) => {
+  const allowed = ['exchange_rate', 'min_exchange_amount', 'exchange_fee_percent', 'credit_charge_notice'];
+  const stmt = db.prepare(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`);
+  for (const k of allowed) {
+    if (req.body[k] !== undefined) {
+      stmt.run(k, String(req.body[k]));
+    }
+  }
+  res.json({ message: '크레딧 충전/환전 정책 및 수치 설정이 저장되었습니다.' });
+});
+
 app.get('/api/credits/exchanges', authenticateToken, (req, res) => {
   const canManage = req.user.is_admin === 1 || req.user.roleList.includes('크레딧 관리');
   let list;
@@ -1000,19 +2117,36 @@ app.get('/api/credits/exchanges', authenticateToken, (req, res) => {
 app.post('/api/credits/exchanges', authenticateToken, (req, res) => {
   const { amount, in_game_name } = req.body;
   const numAmount = Number(amount);
+  const minAmount = getNumericSetting('min_exchange_amount', 1);
+
   if (!numAmount || numAmount <= 0) return res.status(400).json({ error: '환전할 크레딧 금액을 올바르게 입력해주세요.' });
+  if (numAmount < minAmount) return res.status(400).json({ error: `최소 환전 신청 가능 금액은 ${minAmount.toLocaleString()} C 입니다.` });
   if (!in_game_name) return res.status(400).json({ error: '인게임 닉네임을 입력해주세요.' });
 
   if (req.user.credits < numAmount) {
     return res.status(400).json({ error: '보유 크레딧이 부족합니다.' });
   }
 
+  const beforeCredits = req.user.credits || 0;
   db.prepare('UPDATE users SET credits = credits - ? WHERE id = ?').run(numAmount, req.user.id);
 
   const result = db.prepare(`
     INSERT INTO credit_exchanges (user_id, amount, in_game_name, status)
     VALUES (?, ?, ?, 'pending')
   `).run(req.user.id, numAmount, in_game_name);
+
+  recordAssetTransaction({
+    userId: req.user.id,
+    assetType: 'CREDIT',
+    amount: -numAmount,
+    category: '크레딧 환전 신청',
+    description: `[환전 신청 #${result.lastInsertRowid}] 인게임 닉네임 '${in_game_name}' 앞으로 ${numAmount.toLocaleString()} C 환전 출금 신청`,
+    referenceType: 'credit_exchange',
+    referenceId: result.lastInsertRowid,
+    actor: req.user,
+    balanceBefore: beforeCredits,
+    balanceAfter: beforeCredits - numAmount
+  });
 
   res.json({ message: '인게임 원화 환전 요청이 접수되었습니다.', id: result.lastInsertRowid });
 });
@@ -1028,7 +2162,21 @@ app.put('/api/credits/exchanges/:id/review', authenticateToken, requireRole('크
   if (ex.status !== 'pending') return res.status(400).json({ error: '이미 처리된 요청입니다.' });
 
   if (status === 'rejected') {
+    const beforeUser = db.prepare('SELECT credits FROM users WHERE id = ?').get(ex.user_id);
     db.prepare('UPDATE users SET credits = credits + ? WHERE id = ?').run(ex.amount, ex.user_id);
+
+    recordAssetTransaction({
+      userId: ex.user_id,
+      assetType: 'CREDIT',
+      amount: ex.amount,
+      category: '크레딧 환전 거절 환불',
+      description: `[환전 거절 환불 #${ex.id}] ${admin_comment ? `사유: ${admin_comment}` : '관리자 반려로 인한 크레딧 반환'}`,
+      referenceType: 'credit_exchange',
+      referenceId: ex.id,
+      actor: req.user,
+      balanceBefore: beforeUser?.credits || 0,
+      balanceAfter: (beforeUser?.credits || 0) + ex.amount
+    });
   }
 
   db.prepare(`
@@ -1040,20 +2188,555 @@ app.put('/api/credits/exchanges/:id/review', authenticateToken, requireRole('크
   res.json({ message: `크레딧 환전 요청이 ${status === 'completed' ? '완료' : '거절(환불)'} 처리되었습니다.` });
 });
 
-// --- 시스템 설정 (디스코드 웹훅 등) ---
-app.get('/api/settings', authenticateToken, requireAdmin, (req, res) => {
+// --- 크레딧 충전 신청 창구 ---
+app.get('/api/credits/charges', authenticateToken, (req, res) => {
+  const canManage = req.user.is_admin === 1 || req.user.roleList.includes('크레딧 관리');
+  let list;
+  if (canManage) {
+    list = db.prepare(`
+      SELECT cc.*, u.username, u.nickname as user_nickname
+      FROM credit_charges cc
+      JOIN users u ON cc.user_id = u.id
+      ORDER BY cc.id DESC
+    `).all();
+  } else {
+    list = db.prepare(`
+      SELECT cc.*, u.username, u.nickname as user_nickname
+      FROM credit_charges cc
+      JOIN users u ON cc.user_id = u.id
+      WHERE cc.user_id = ?
+      ORDER BY cc.id DESC
+    `).all(req.user.id);
+  }
+  res.json(list);
+});
+
+app.post('/api/credits/charges', authenticateToken, upload.single('proof_image'), (req, res) => {
+  const { nickname, amount, charge_datetime, notes } = req.body;
+  const numAmount = Number(amount);
+
+  if (!nickname || !nickname.trim()) {
+    return res.status(400).json({ error: '인게임 닉네임을 입력해주세요.' });
+  }
+  if (!numAmount || numAmount <= 0) {
+    return res.status(400).json({ error: '충전할 크레딧 수량을 올바르게 입력해주세요.' });
+  }
+  if (!charge_datetime || !charge_datetime.trim()) {
+    return res.status(400).json({ error: '송금/충전 일시를 입력해주세요.' });
+  }
+
+  const proof_image = req.file ? `/uploads/${req.file.filename}` : null;
+
+  const result = db.prepare(`
+    INSERT INTO credit_charges (user_id, nickname, amount, proof_image, charge_datetime, notes, status)
+    VALUES (?, ?, ?, ?, ?, ?, 'pending')
+  `).run(req.user.id, nickname.trim(), numAmount, proof_image, charge_datetime.trim(), notes || '');
+
+  res.json({
+    message: '크레딧 충전 신청이 접수되었습니다! 크레딧 관리자가 확인 후 충전 처리합니다.',
+    id: result.lastInsertRowid
+  });
+});
+
+app.put('/api/credits/charges/:id/review', authenticateToken, requireRole('크레딧 관리'), (req, res) => {
+  const { status, admin_comment, custom_amount, bonus_points } = req.body;
+  if (!['approved', 'rejected'].includes(status)) {
+    return res.status(400).json({ error: '올바른 승인/거절 상태를 지정하세요.' });
+  }
+
+  const charge = db.prepare('SELECT * FROM credit_charges WHERE id = ?').get(req.params.id);
+  if (!charge) return res.status(404).json({ error: '충전 신청 내역을 찾을 수 없습니다.' });
+  if (charge.status !== 'pending') return res.status(400).json({ error: '이미 처리된 충전 신청입니다.' });
+
+  let finalCredit = 0;
+  let finalBonusPts = 0;
+
+  if (status === 'approved') {
+    finalCredit = (custom_amount !== undefined && custom_amount !== null && custom_amount !== '')
+      ? Math.round(Number(custom_amount))
+      : Number(charge.amount);
+    finalBonusPts = (bonus_points !== undefined && bonus_points !== null && bonus_points !== '')
+      ? Math.round(Number(bonus_points))
+      : 0;
+
+    const beforeUser = db.prepare('SELECT points, credits FROM users WHERE id = ?').get(charge.user_id);
+    db.prepare('UPDATE users SET credits = credits + ?, points = points + ? WHERE id = ?')
+      .run(finalCredit, finalBonusPts, charge.user_id);
+
+    if (finalCredit !== 0) {
+      recordAssetTransaction({
+        userId: charge.user_id,
+        assetType: 'CREDIT',
+        amount: finalCredit,
+        category: '크레딧 충전 승인',
+        description: `[크레딧 충전 #${charge.id}] 닉네임 '${charge.nickname}' (일시: ${charge.charge_datetime}) 충전 승인${admin_comment ? ` - ${admin_comment}` : ''}`,
+        referenceType: 'credit_charge',
+        referenceId: charge.id,
+        actor: req.user,
+        balanceBefore: beforeUser?.credits || 0,
+        balanceAfter: (beforeUser?.credits || 0) + finalCredit
+      });
+    }
+
+    if (finalBonusPts !== 0) {
+      recordAssetTransaction({
+        userId: charge.user_id,
+        assetType: 'POINT',
+        amount: finalBonusPts,
+        category: '크레딧 충전 보너스',
+        description: `[크레딧 충전 #${charge.id}] 충전 승인 특별 보너스 연방 포인트 지급`,
+        referenceType: 'credit_charge',
+        referenceId: charge.id,
+        actor: req.user,
+        balanceBefore: beforeUser?.points || 0,
+        balanceAfter: (beforeUser?.points || 0) + finalBonusPts
+      });
+
+      const activeSeason = db.prepare('SELECT id FROM seasons WHERE is_active = 1 LIMIT 1').get();
+      if (activeSeason) {
+        db.prepare(`
+          INSERT INTO user_season_points (season_id, user_id, points)
+          VALUES (?, ?, ?)
+          ON CONFLICT(season_id, user_id) DO UPDATE SET points = points + excluded.points
+        `).run(activeSeason.id, charge.user_id, finalBonusPts);
+      }
+    }
+  }
+
+  db.prepare(`
+    UPDATE credit_charges
+    SET status = ?, approved_amount = ?, bonus_points = ?, admin_comment = ?, processed_by = ?, processed_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(status, finalCredit, finalBonusPts, admin_comment || '', req.user.id, req.params.id);
+
+  res.json({
+    message: status === 'approved'
+      ? `크레딧 충전이 승인되어 +${finalCredit.toLocaleString()} C${finalBonusPts ? ` (+${finalBonusPts} P)` : ''}가 지급되었습니다.`
+      : '크레딧 충전 신청이 거절되었습니다.'
+  });
+});
+
+// --- 연방 포인트 / 크레딧 입출금 상세 원장 & 데이터 관리 (CSV / XLSX 다운로드) ---
+app.get('/api/transactions', authenticateToken, (req, res) => {
+  const canManageData = req.user.is_admin === 1 || req.user.roleList.includes('데이터 관리') || req.user.roleList.includes('크레딧 관리') || req.user.roleList.includes('랭킹 관리자');
+  const { asset_type, tx_type, category, user_id, search, start_date, end_date, limit = 300 } = req.query;
+
+  const whereClauses = [];
+  const params = [];
+
+  if (!canManageData) {
+    whereClauses.push('t.user_id = ?');
+    params.push(req.user.id);
+  } else if (user_id) {
+    whereClauses.push('t.user_id = ?');
+    params.push(Number(user_id));
+  }
+
+  if (asset_type && asset_type !== 'ALL') {
+    const normalizedAsset = asset_type === 'POINTS' ? 'POINT' : (asset_type === 'CREDITS' ? 'CREDIT' : asset_type);
+    whereClauses.push('t.asset_type = ?');
+    params.push(normalizedAsset);
+  }
+  if (tx_type && tx_type !== 'ALL') {
+    const normalizedTx = tx_type === 'DEPOSIT' ? 'IN' : (tx_type === 'WITHDRAW' ? 'OUT' : tx_type);
+    whereClauses.push('t.tx_type = ?');
+    params.push(normalizedTx);
+  }
+  if (category && category !== 'ALL') {
+    whereClauses.push('t.category = ?');
+    params.push(category);
+  }
+  if (start_date) {
+    whereClauses.push('date(t.created_at) >= date(?)');
+    params.push(start_date);
+  }
+  if (end_date) {
+    whereClauses.push('date(t.created_at) <= date(?)');
+    params.push(end_date);
+  }
+  if (search && search.trim()) {
+    whereClauses.push('(t.username LIKE ? OR t.nickname LIKE ? OR t.description LIKE ? OR t.category LIKE ? OR t.actor_name LIKE ?)');
+    const q = `%${search.trim()}%`;
+    params.push(q, q, q, q, q);
+  }
+
+  const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+  const maxLimit = Math.min(2000, Math.max(10, Number(limit) || 300));
+
+  const rows = db.prepare(`
+    SELECT t.*
+    FROM asset_transactions t
+    ${whereSql}
+    ORDER BY t.id DESC
+    LIMIT ?
+  `).all(...params, maxLimit);
+
+  // 요약 통계
+  const summary = db.prepare(`
+    SELECT
+      COALESCE(SUM(CASE WHEN asset_type = 'POINT' AND tx_type = 'IN' THEN amount ELSE 0 END), 0) as total_point_in,
+      COALESCE(SUM(CASE WHEN asset_type = 'POINT' AND tx_type = 'OUT' THEN amount ELSE 0 END), 0) as total_point_out,
+      COALESCE(SUM(CASE WHEN asset_type = 'CREDIT' AND tx_type = 'IN' THEN amount ELSE 0 END), 0) as total_credit_in,
+      COALESCE(SUM(CASE WHEN asset_type = 'CREDIT' AND tx_type = 'OUT' THEN amount ELSE 0 END), 0) as total_credit_out,
+      COUNT(*) as total_count
+    FROM asset_transactions t
+    ${whereSql}
+  `).get(...params);
+
+  res.json({ transactions: rows, summary });
+});
+
+// 수동 원장 기록 추가 / 입출금 직접 발생 ('데이터 관리' 또는 슈퍼관리자)
+app.post('/api/transactions/manual', authenticateToken, requireRole('데이터 관리'), (req, res) => {
+  const { user_id, asset_type, tx_type, amount, category, description, apply_to_balance = true } = req.body;
+  const targetUser = db.prepare('SELECT * FROM users WHERE id = ?').get(Number(user_id));
+  if (!targetUser) return res.status(404).json({ error: '대상 사용자를 찾을 수 없습니다.' });
+
+  const rawAmt = Number(amount) || 0;
+  const numAmt = Math.abs(rawAmt);
+  if (numAmt <= 0) return res.status(400).json({ error: '0이 아닌 수량을 입력해주세요.' });
+
+  const normalizedAsset = (asset_type === 'POINT' || asset_type === 'POINTS') ? 'POINT' : 'CREDIT';
+  const isOut = tx_type === 'OUT' || tx_type === 'WITHDRAW' || (!tx_type && rawAmt < 0);
+  const signedAmt = isOut ? -numAmt : numAmt;
+  const currentBal = normalizedAsset === 'POINT' ? (targetUser.points || 0) : (targetUser.credits || 0);
+  const nextBal = apply_to_balance ? (currentBal + signedAmt) : currentBal;
+
+  if (apply_to_balance) {
+    if (normalizedAsset === 'POINT') {
+      db.prepare('UPDATE users SET points = ? WHERE id = ?').run(nextBal, targetUser.id);
+    } else {
+      db.prepare('UPDATE users SET credits = ? WHERE id = ?').run(nextBal, targetUser.id);
+    }
+  }
+
+  recordAssetTransaction({
+    userId: targetUser.id,
+    assetType: normalizedAsset,
+    amount: signedAmt,
+    category: category || '데이터 관리자 수기 기록',
+    description: description || '데이터 관리자에 의한 수동 입출금 기록',
+    referenceType: 'manual_ledger',
+    actor: req.user,
+    balanceBefore: currentBal,
+    balanceAfter: nextBal
+  });
+
+  res.json({ message: '입출금 상세 기록이 성공적으로 등록되었습니다.' });
+});
+
+// 순수 Node.js 기반 표준 .xlsx (OpenXML ZIP 컨테이너) 생성기 (외부 패키지 설치 불필요)
+function createXlsxBuffer(sheetName, headers, rows) {
+  const escapeXml = (val) => String(val ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+
+  const colLetter = (idx) => {
+    let s = '';
+    let n = idx + 1;
+    while (n > 0) {
+      const rem = (n - 1) % 26;
+      s = String.fromCharCode(65 + rem) + s;
+      n = Math.floor((n - 1) / 26);
+    }
+    return s;
+  };
+
+  let sheetDataXml = '';
+  // Header Row (Row 1)
+  sheetDataXml += `<row r="1">`;
+  headers.forEach((h, cIdx) => {
+    const ref = `${colLetter(cIdx)}1`;
+    sheetDataXml += `<c r="${ref}" t="inlineStr"><is><t>${escapeXml(h)}</t></is></c>`;
+  });
+  sheetDataXml += `</row>`;
+
+  // Data Rows
+  rows.forEach((row, rIdx) => {
+    const rowNum = rIdx + 2;
+    sheetDataXml += `<row r="${rowNum}">`;
+    row.forEach((cellVal, cIdx) => {
+      const ref = `${colLetter(cIdx)}${rowNum}`;
+      if (typeof cellVal === 'number' && !isNaN(cellVal)) {
+        sheetDataXml += `<c r="${ref}"><v>${cellVal}</v></c>`;
+      } else {
+        sheetDataXml += `<c r="${ref}" t="inlineStr"><is><t>${escapeXml(cellVal)}</t></is></c>`;
+      }
+    });
+    sheetDataXml += `</row>`;
+  });
+
+  const contentTypesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+</Types>`;
+
+  const relsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>`;
+
+  const workbookXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="${escapeXml(sheetName || 'Sheet1')}" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>`;
+
+  const workbookRelsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>`;
+
+  const worksheetXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>${sheetDataXml}</sheetData>
+</worksheet>`;
+
+  const files = [
+    { name: '[Content_Types].xml', data: Buffer.from(contentTypesXml, 'utf8') },
+    { name: '_rels/.rels', data: Buffer.from(relsXml, 'utf8') },
+    { name: 'xl/workbook.xml', data: Buffer.from(workbookXml, 'utf8') },
+    { name: 'xl/_rels/workbook.xml.rels', data: Buffer.from(workbookRelsXml, 'utf8') },
+    { name: 'xl/worksheets/sheet1.xml', data: Buffer.from(worksheetXml, 'utf8') }
+  ];
+
+  // CRC32 Table
+  const crcTable = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let k = 0; k < 8; k++) {
+      c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    }
+    crcTable[i] = c >>> 0;
+  }
+  const crc32 = (buf) => {
+    let crc = 0xFFFFFFFF;
+    for (let i = 0; i < buf.length; i++) {
+      crc = crcTable[(crc ^ buf[i]) & 0xFF] ^ (crc >>> 8);
+    }
+    return (crc ^ 0xFFFFFFFF) >>> 0;
+  };
+
+  const localParts = [];
+  const centralParts = [];
+  let offset = 0;
+
+  for (const file of files) {
+    const nameBuf = Buffer.from(file.name, 'utf8');
+    const crc = crc32(file.data);
+    const size = file.data.length;
+
+    const localHeader = Buffer.alloc(30);
+    localHeader.writeUInt32LE(0x04034b50, 0); // signature
+    localHeader.writeUInt16LE(20, 4); // version needed
+    localHeader.writeUInt16LE(0x0800, 6); // UTF-8 flag
+    localHeader.writeUInt16LE(0, 8); // store method (0 = uncompressed)
+    localHeader.writeUInt16LE(0, 10); // mod time
+    localHeader.writeUInt16LE(0, 12); // mod date
+    localHeader.writeUInt32LE(crc, 14);
+    localHeader.writeUInt32LE(size, 18);
+    localHeader.writeUInt32LE(size, 22);
+    localHeader.writeUInt16LE(nameBuf.length, 26);
+    localHeader.writeUInt16LE(0, 28);
+
+    localParts.push(localHeader, nameBuf, file.data);
+
+    const centralHeader = Buffer.alloc(46);
+    centralHeader.writeUInt32LE(0x02014b50, 0); // central dir signature
+    centralHeader.writeUInt16LE(20, 4); // version made by
+    centralHeader.writeUInt16LE(20, 6); // version needed
+    centralHeader.writeUInt16LE(0x0800, 8); // UTF-8 flag
+    centralHeader.writeUInt16LE(0, 10); // store method
+    centralHeader.writeUInt16LE(0, 12);
+    centralHeader.writeUInt16LE(0, 14);
+    centralHeader.writeUInt32LE(crc, 16);
+    centralHeader.writeUInt32LE(size, 20);
+    centralHeader.writeUInt32LE(size, 24);
+    centralHeader.writeUInt16LE(nameBuf.length, 28);
+    centralHeader.writeUInt16LE(0, 30);
+    centralHeader.writeUInt16LE(0, 32);
+    centralHeader.writeUInt16LE(0, 34);
+    centralHeader.writeUInt16LE(0, 36);
+    centralHeader.writeUInt32LE(0, 38);
+    centralHeader.writeUInt32LE(offset, 42);
+
+    centralParts.push(centralHeader, nameBuf);
+    offset += 30 + nameBuf.length + size;
+  }
+
+  const centralDirBuf = Buffer.concat(centralParts);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(0, 4);
+  eocd.writeUInt16LE(0, 6);
+  eocd.writeUInt16LE(files.length, 8);
+  eocd.writeUInt16LE(files.length, 10);
+  eocd.writeUInt32LE(centralDirBuf.length, 12);
+  eocd.writeUInt32LE(offset, 16);
+  eocd.writeUInt16LE(0, 20);
+
+  return Buffer.concat([...localParts, centralDirBuf, eocd]);
+}
+
+// '데이터 관리' 권한자 또는 슈퍼관리자 전용 CSV / XLSX 다운로드
+app.get('/api/transactions/export', authenticateToken, requireRole('데이터 관리'), (req, res) => {
+  try {
+    const { format = 'csv', asset_type, tx_type, category, user_id, search, start_date, end_date } = req.query;
+
+    const whereClauses = [];
+    const params = [];
+
+    if (user_id) {
+      whereClauses.push('t.user_id = ?');
+      params.push(Number(user_id));
+    }
+    if (asset_type && asset_type !== 'ALL') {
+      const normalizedAsset = asset_type === 'POINTS' ? 'POINT' : (asset_type === 'CREDITS' ? 'CREDIT' : asset_type);
+      whereClauses.push('t.asset_type = ?');
+      params.push(normalizedAsset);
+    }
+    if (tx_type && tx_type !== 'ALL') {
+      const normalizedTx = tx_type === 'DEPOSIT' ? 'IN' : (tx_type === 'WITHDRAW' ? 'OUT' : tx_type);
+      whereClauses.push('t.tx_type = ?');
+      params.push(normalizedTx);
+    }
+    if (category && category !== 'ALL') {
+      whereClauses.push('t.category = ?');
+      params.push(category);
+    }
+    if (start_date) {
+      whereClauses.push('date(t.created_at) >= date(?)');
+      params.push(start_date);
+    }
+    if (end_date) {
+      whereClauses.push('date(t.created_at) <= date(?)');
+      params.push(end_date);
+    }
+    if (search && search.trim()) {
+      whereClauses.push('(t.username LIKE ? OR t.nickname LIKE ? OR t.description LIKE ? OR t.category LIKE ? OR t.actor_name LIKE ?)');
+      const q = `%${search.trim()}%`;
+      params.push(q, q, q, q, q);
+    }
+
+    const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+    const rows = db.prepare(`
+      SELECT t.*
+      FROM asset_transactions t
+      ${whereSql}
+      ORDER BY t.id DESC
+    `).all(...params);
+
+    const headers = [
+      '기록번호(ID)',
+      '일시(Created At)',
+      '유저ID',
+      '아이디(Username)',
+      '닉네임(Nickname)',
+      '재화종류( 포인트/크레딧 )',
+      '입출금구분(입금/출금)',
+      '상세분류(Category)',
+      '변동수량(Amount)',
+      '변동전잔액(Before)',
+      '변동후잔액(After)',
+      '상세내역설명(Description)',
+      '연관모듈(Ref Type)',
+      '연관번호(Ref ID)',
+      '처리자/실행자(Actor)'
+    ];
+
+    const dataRows = rows.map(r => [
+      r.id,
+      r.created_at,
+      r.user_id,
+      r.username || '',
+      r.nickname || '',
+      r.asset_type === 'POINT' ? '연방 포인트(P)' : '크레딧(C)',
+      r.tx_type === 'IN' ? '입금(+)' : '출금(-)',
+      r.category || '',
+      r.tx_type === 'IN' ? Number(r.amount) : -Number(r.amount),
+      Number(r.balance_before),
+      Number(r.balance_after),
+      r.description || '',
+      r.reference_type || '',
+      r.reference_id ?? '',
+      r.actor_name || '시스템'
+    ]);
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+
+    if (String(format).toLowerCase() === 'xlsx') {
+      const xlsxBuf = createXlsxBuffer('포인트_크레딧_입출금원장', headers, dataRows);
+      const filename = `federation-asset-ledger-${timestamp}.xlsx`;
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      return res.send(xlsxBuf);
+    } else {
+      const escapeCsv = (val) => {
+        const s = String(val ?? '');
+        if (s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r')) {
+          return `"${s.replace(/"/g, '""')}"`;
+        }
+        return s;
+      };
+      const csvLines = [
+        headers.map(escapeCsv).join(','),
+        ...dataRows.map(r => r.map(escapeCsv).join(','))
+      ];
+      // UTF-8 BOM 추가 (엑셀에서 한글 깨짐 방지)
+      const csvContent = '\uFEFF' + csvLines.join('\r\n');
+      const filename = `federation-asset-ledger-${timestamp}.csv`;
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      return res.send(csvContent);
+    }
+  } catch (err) {
+    console.error('[Transactions Export Error]', err);
+    res.status(500).json({ error: `데이터 내보내기 오류: ${err.message}` });
+  }
+});
+
+// --- 시스템 설정 (디스코드 웹훅 및 전역 수치 조절 등) ---
+app.get('/api/settings', authenticateToken, (req, res) => {
+  const canManage = req.user.is_admin === 1 || req.user.roleList.includes('랭킹 관리자') || req.user.roleList.includes('크레딧 관리') || req.user.roleList.includes('데이터 관리');
+  if (!canManage) return res.status(403).json({ error: '권한이 필요합니다.' });
+
   const rows = db.prepare('SELECT * FROM settings').all();
   const settingsObj = {};
   rows.forEach(r => { settingsObj[r.key] = r.value; });
   res.json(settingsObj);
 });
 
-app.post('/api/settings', authenticateToken, requireAdmin, (req, res) => {
-  const { key, value } = req.body;
-  db.prepare(`
+app.post('/api/settings', authenticateToken, (req, res) => {
+  const canManage = req.user.is_admin === 1 || req.user.roleList.includes('랭킹 관리자') || req.user.roleList.includes('크레딧 관리');
+  if (!canManage) return res.status(403).json({ error: '권한이 필요합니다.' });
+
+  const { key, value, settings } = req.body;
+  const upsert = db.prepare(`
     INSERT INTO settings (key, value) VALUES (?, ?)
     ON CONFLICT(key) DO UPDATE SET value = excluded.value
-  `).run(key, value);
+  `);
+
+  if (settings && typeof settings === 'object') {
+    for (const [k, v] of Object.entries(settings)) {
+      if (['system_title', 'nation_name', 'server_logo_text'].includes(k) && req.user.username !== 'admin') continue;
+      upsert.run(k, String(v ?? ''));
+    }
+    return res.json({ message: '시스템 세부 수치 및 정책 설정이 일괄 저장되었습니다.' });
+  }
+
+  if (key) {
+    if (['system_title', 'nation_name', 'server_logo_text'].includes(key) && req.user.username !== 'admin') {
+      return res.status(403).json({ error: '국가 및 시스템 이름은 최초 admin 계정에서만 수정할 수 있습니다.' });
+    }
+    upsert.run(key, String(value ?? ''));
+  }
   res.json({ message: '설정이 저장되었습니다.' });
 });
 
@@ -1075,8 +2758,11 @@ app.post('/api/settings/test-webhook', authenticateToken, requireAdmin, async (r
 const DB_TABLES = [
   'settings',
   'users',
+  'roles',
+  'user_roles',
   'seasons',
   'user_season_points',
+  'ranking_tiers',
   'supplies',
   'supply_requests',
   'notices',
@@ -1086,7 +2772,9 @@ const DB_TABLES = [
   'schedules',
   'quests',
   'quest_submissions',
-  'credit_exchanges'
+  'credit_exchanges',
+  'credit_charges',
+  'asset_transactions'
 ];
 
 // 1. 데이터 JSON으로 추출 (Export)
@@ -1148,6 +2836,8 @@ app.post('/api/admin/import', authenticateToken, requireAdmin, upload.single('ba
     }
 
     const currentSuperAdmin = req.user;
+    // 복원 데이터에 현재 관리자가 없을 경우를 대비해, 비우기 전에 비밀번호 해시를 보관
+    const savedAdminPassword = db.prepare('SELECT password FROM users WHERE id = ?').get(currentSuperAdmin.id)?.password;
     const restoredCounts = {};
 
     // SQLite 외래키 제약 임시 해제 및 트랜잭션 수행
@@ -1186,15 +2876,15 @@ app.post('/api/admin/import', authenticateToken, requireAdmin, upload.single('ba
       // 3) 안전장치: 현재 슈퍼관리자 계정이 삭제되지 않도록 보장
       const checkAdmin = db.prepare('SELECT id, is_admin FROM users WHERE id = ?').get(currentSuperAdmin.id);
       if (!checkAdmin) {
+        const pw = savedAdminPassword;
         db.prepare(`
           INSERT OR REPLACE INTO users (id, username, password, nickname, is_admin, roles, status)
-          VALUES (?, ?, ?, ?, 1, ?, 'approved')
+          VALUES (?, ?, ?, ?, 1, '[]', 'approved')
         `).run(
           currentSuperAdmin.id,
           currentSuperAdmin.username,
-          currentSuperAdmin.password || bcrypt.hashSync('admin', 10),
-          currentSuperAdmin.nickname || '슈퍼관리자',
-          JSON.stringify(ALL_ROLES)
+          pw || bcrypt.hashSync('admin', 10),
+          currentSuperAdmin.nickname || '슈퍼관리자'
         );
       } else if (checkAdmin.is_admin !== 1) {
         db.prepare('UPDATE users SET is_admin = 1 WHERE id = ?').run(currentSuperAdmin.id);
@@ -1207,6 +2897,10 @@ app.post('/api/admin/import', authenticateToken, requireAdmin, upload.single('ba
     } finally {
       db.exec('PRAGMA foreign_keys = ON;');
     }
+
+    // 예전 형식 백업(users.roles 에 권한 문자열 저장)을 복원한 경우 역할 시스템으로 변환
+    migrateLegacyUserPermissions();
+    normalizeRolePositions();
 
     res.json({
       message: '데이터베이스 복원이 성공적으로 완료되었습니다.',

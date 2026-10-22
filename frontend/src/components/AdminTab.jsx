@@ -23,25 +23,19 @@ import {
   FileJson,
   CheckCircle2,
   AlertTriangle,
-  RefreshCw
+  RefreshCw,
+  FileSpreadsheet,
+  Sliders,
+  Plus,
+  History,
+  Edit2
 } from 'lucide-react';
-
-const ALL_ROLES = [
-  '납품 등록',
-  '납품 관리',
-  '공지 관리',
-  '시즌 관리',
-  '샵 관리',
-  '사업가',
-  '기업 관리',
-  '일정 관리',
-  '퀘스트 관리',
-  '크레딧 관리',
-  '계정 관리'
-];
+import RoleManager from './RoleManager';
 
 export default function AdminTab({ user, refreshUser, branding, refreshBranding }) {
   const [users, setUsers] = useState([]);
+  const [allRoles, setAllRoles] = useState([]);
+  const [roleRefreshKey, setRoleRefreshKey] = useState(0);
   const [settings, setSettings] = useState({ discord_webhook_url: '' });
   const [notices, setNotices] = useState([]);
   const [selectedNoticeCategory, setSelectedNoticeCategory] = useState('supply');
@@ -71,27 +65,92 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
   // 모달 상태
   const [showAssetModal, setShowAssetModal] = useState(false);
   const [selectedUser, setSelectedUser] = useState(null);
-  const [assetForm, setAssetForm] = useState({ points: 0, credits: 0 });
+  const [assetForm, setAssetForm] = useState({
+    points: 0,
+    credits: 0,
+    nickname: '',
+    custom_title: '',
+    reason: '',
+    sync_active_season: true
+  });
 
   // 새 슈퍼 관리자 생성 모달
   const [showSuperAdminModal, setShowSuperAdminModal] = useState(false);
   const [superAdminForm, setSuperAdminForm] = useState({ username: '', password: '', nickname: '' });
 
+  // 전역 배율 및 수치 설정 상태
+  const [globalNumericConfig, setGlobalNumericConfig] = useState({
+    point_multiplier: '1.0',
+    credit_multiplier: '1.0',
+    ranking_board_notice: '',
+    exchange_rate: '1.0',
+    min_exchange_amount: '100',
+    exchange_fee_percent: '0'
+  });
+
+  // 입출금 원장 & 데이터 관리 상태
+  const [transactions, setTransactions] = useState([]);
+  const [txFilter, setTxFilter] = useState({ asset_type: 'ALL', tx_type: 'ALL', category: 'ALL', search: '' });
+  const [showManualTxModal, setShowManualTxModal] = useState(false);
+  const [manualTxForm, setManualTxForm] = useState({
+    user_id: '',
+    asset_type: 'POINT',
+    amount: 0,
+    category: '관리자 수동 정산',
+    description: ''
+  });
+
   const isInitialAdmin = user.username === 'admin';
-  const canManageAccounts = user.is_admin || user.roles?.includes('계정 관리');
-  const canManageNotices = user.is_admin || user.roles?.includes('공지 관리');
+  const canManageAccounts = user.is_admin || user.permissions?.includes('계정 관리');
+  const canManageRoles = user.is_admin || user.permissions?.includes('역할 관리');
+  const canManageNotices = user.is_admin || user.permissions?.includes('공지 관리');
+  const canManageData = user.is_admin || user.permissions?.includes('데이터 관리');
+  const canManageRanking = user.is_admin || user.permissions?.includes('랭킹 관리자') || user.permissions?.includes('시즌 관리');
+
+  const loadTransactions = async (customFilter = txFilter) => {
+    if (!canManageData) return;
+    try {
+      const params = new URLSearchParams();
+      if (customFilter.asset_type && customFilter.asset_type !== 'ALL') params.set('asset_type', customFilter.asset_type);
+      if (customFilter.tx_type && customFilter.tx_type !== 'ALL') params.set('tx_type', customFilter.tx_type);
+      if (customFilter.category && customFilter.category !== 'ALL') params.set('category', customFilter.category);
+      if (customFilter.search) params.set('search', customFilter.search);
+      params.set('limit', '300');
+      const data = await apiRequest(`/transactions?${params.toString()}`);
+      setTransactions(Array.isArray(data) ? data : (data?.transactions || []));
+    } catch (err) {
+      console.error(err);
+      setTransactions([]);
+    }
+  };
 
   const loadData = async () => {
     try {
       setLoading(true);
-      const [usersData, settingsData, noticesData] = await Promise.all([
-        apiRequest('/users'),
-        user.is_admin ? apiRequest('/settings') : Promise.resolve({}),
-        canManageNotices ? apiRequest('/notices') : Promise.resolve([])
+      const [usersData, rolesData, settingsData, noticesData, rankCfg, creditCfg] = await Promise.all([
+        (canManageAccounts || canManageRoles || canManageData || canManageRanking) ? apiRequest('/users').catch(() => []) : Promise.resolve([]),
+        apiRequest('/roles').catch(() => []),
+        user.is_admin ? apiRequest('/settings').catch(() => ({})) : Promise.resolve({}),
+        canManageNotices ? apiRequest('/notices').catch(() => []) : Promise.resolve([]),
+        (user.is_admin || canManageRanking) ? apiRequest('/ranking/config').catch(() => null) : Promise.resolve(null),
+        user.is_admin ? apiRequest('/credits/config').catch(() => null) : Promise.resolve(null)
       ]);
-      setUsers(usersData);
-      setSettings(settingsData);
-      setNotices(noticesData || []);
+      setUsers(Array.isArray(usersData) ? usersData : []);
+      setAllRoles(Array.isArray(rolesData) ? rolesData : []);
+      setSettings(settingsData || {});
+      setNotices(Array.isArray(noticesData) ? noticesData : []);
+
+      if (rankCfg || creditCfg) {
+        setGlobalNumericConfig(prev => ({
+          ...prev,
+          ...(rankCfg || {}),
+          ...(creditCfg || {})
+        }));
+      }
+
+      if (canManageData) {
+        await loadTransactions();
+      }
 
       // 기본 선택 공지 폼 설정 (supply)
       const currentNotice = (noticesData || []).find(n => n.category === selectedNoticeCategory) || (noticesData || [])[0];
@@ -190,24 +249,19 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
     }
   };
 
-  const handleToggleRole = async (targetUser, roleName) => {
-    const currentRoles = targetUser.roles || [];
-    let updatedRoles;
-    if (currentRoles.includes(roleName)) {
-      updatedRoles = currentRoles.filter(r => r !== roleName);
-    } else {
-      updatedRoles = [...currentRoles, roleName];
-    }
+  const handleToggleRole = async (targetUser, roleObj) => {
+    const currentRoleIds = (targetUser.roles || []).map(r => r.id);
+    const updatedRoleIds = currentRoleIds.includes(roleObj.id)
+      ? currentRoleIds.filter(id => id !== roleObj.id)
+      : [...currentRoleIds, roleObj.id];
 
     try {
       await apiRequest(`/users/${targetUser.id}/roles`, {
         method: 'PUT',
-        body: JSON.stringify({
-          roles: updatedRoles,
-          is_admin: targetUser.is_admin
-        })
+        body: JSON.stringify({ role_ids: updatedRoleIds })
       });
-      loadData();
+      await loadData();
+      setRoleRefreshKey(k => k + 1);
       if (refreshUser && targetUser.id === user.id) refreshUser();
     } catch (err) {
       alert(err.message);
@@ -221,14 +275,12 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
     }
 
     try {
-      await apiRequest(`/users/${targetUser.id}/roles`, {
+      await apiRequest(`/users/${targetUser.id}/admin`, {
         method: 'PUT',
-        body: JSON.stringify({
-          roles: targetUser.roles,
-          is_admin: !targetUser.is_admin
-        })
+        body: JSON.stringify({ is_admin: !targetUser.is_admin })
       });
       loadData();
+      if (refreshUser && targetUser.id === user.id) refreshUser();
     } catch (err) {
       alert(err.message);
     }
@@ -257,10 +309,97 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
         method: 'PUT',
         body: JSON.stringify(assetForm)
       });
-      alert('재화가 수정되었습니다.');
+      if (assetForm.nickname !== (selectedUser.nickname || '') || assetForm.custom_title !== (selectedUser.custom_title || '')) {
+        await apiRequest(`/users/${selectedUser.id}/profile`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            nickname: assetForm.nickname,
+            custom_title: assetForm.custom_title
+          })
+        });
+      }
+      alert('사용자 프로필 및 재화 수치가 정밀 수정되었습니다.');
       setShowAssetModal(false);
       loadData();
       if (refreshUser && selectedUser.id === user.id) refreshUser();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const handleSaveGlobalNumericConfig = async (e) => {
+    e.preventDefault();
+    try {
+      await Promise.all([
+        apiRequest('/ranking/config', {
+          method: 'PUT',
+          body: JSON.stringify({
+            point_multiplier: globalNumericConfig.point_multiplier,
+            credit_multiplier: globalNumericConfig.credit_multiplier,
+            ranking_board_notice: globalNumericConfig.ranking_board_notice
+          })
+        }),
+        user.is_admin
+          ? apiRequest('/credits/config', {
+              method: 'PUT',
+              body: JSON.stringify({
+                exchange_rate: globalNumericConfig.exchange_rate,
+                min_exchange_amount: globalNumericConfig.min_exchange_amount,
+                exchange_fee_percent: globalNumericConfig.exchange_fee_percent
+              })
+            })
+          : Promise.resolve()
+      ]);
+      alert('전역 수치 및 배율 설정이 저장되었습니다.');
+      loadData();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const handleDownloadLedger = async (format = 'csv') => {
+    try {
+      const token = getAuthToken();
+      const params = new URLSearchParams();
+      params.set('format', format);
+      if (txFilter.asset_type && txFilter.asset_type !== 'ALL') params.set('asset_type', txFilter.asset_type);
+      if (txFilter.tx_type && txFilter.tx_type !== 'ALL') params.set('tx_type', txFilter.tx_type);
+      if (txFilter.category && txFilter.category !== 'ALL') params.set('category', txFilter.category);
+      if (txFilter.search) params.set('search', txFilter.search);
+
+      const res = await fetch(`/api/transactions/export?${params.toString()}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || '다운로드 실패');
+      }
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `federation_transactions_${new Date().toISOString().slice(0, 10)}.${format}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const handleCreateManualTx = async (e) => {
+    e.preventDefault();
+    try {
+      const res = await apiRequest('/transactions/manual', {
+        method: 'POST',
+        body: JSON.stringify(manualTxForm)
+      });
+      alert(res.message);
+      setShowManualTxModal(false);
+      setManualTxForm({ user_id: '', asset_type: 'POINT', amount: 0, category: '관리자 수동 정산', description: '' });
+      loadData();
+      if (refreshUser) refreshUser();
     } catch (err) {
       alert(err.message);
     }
@@ -895,33 +1034,311 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
         </div>
       )}
 
-      {/* 4. 승인된 사용자 및 디스코드 스타일 역할 관리 */}
+      {/* 🎛️ 전역 수치 및 보상 배율 정밀 제어 센터 (슈퍼관리자 & 랭킹 관리자) */}
+      {(user.is_admin || canManageRanking) && (
+        <div className="card" style={{ marginBottom: 28, border: '1px solid #bfdbfe', background: '#f8fafc' }}>
+          <div className="card-header">
+            <div className="card-title">
+              <Sliders size={20} color="#2563eb" />
+              <span>전역 수치 & 보상 배율 정밀 컨트롤 센터</span>
+            </div>
+            <span className="badge badge-approved">⚡ 실시간 수치 제어</span>
+          </div>
+          <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 16 }}>
+            납품, 퀘스트, 단기 알바, 크레딧 환전 비율 등 서버 내 모든 경제 및 포인트 수치를 소수점 배율과 정확한 값으로 즉시 조절합니다.
+          </p>
+
+          <form onSubmit={handleSaveGlobalNumericConfig}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 12 }}>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label" style={{ fontSize: 12 }}>전역 포인트 획득 배율 (x배)</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  className="input"
+                  value={globalNumericConfig.point_multiplier}
+                  onChange={(e) => setGlobalNumericConfig({ ...globalNumericConfig, point_multiplier: e.target.value })}
+                />
+              </div>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label" style={{ fontSize: 12 }}>전역 크레딧 획득 배율 (x배)</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  className="input"
+                  value={globalNumericConfig.credit_multiplier}
+                  onChange={(e) => setGlobalNumericConfig({ ...globalNumericConfig, credit_multiplier: e.target.value })}
+                />
+              </div>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label" style={{ fontSize: 12 }}>1 C당 인게임 원화 환전비</label>
+                <input
+                  type="number"
+                  step="any"
+                  className="input"
+                  disabled={!user.is_admin}
+                  value={globalNumericConfig.exchange_rate}
+                  onChange={(e) => setGlobalNumericConfig({ ...globalNumericConfig, exchange_rate: e.target.value })}
+                />
+              </div>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label" style={{ fontSize: 12 }}>최소 환전 가능 크레딧 (C)</label>
+                <input
+                  type="number"
+                  className="input"
+                  disabled={!user.is_admin}
+                  value={globalNumericConfig.min_exchange_amount}
+                  onChange={(e) => setGlobalNumericConfig({ ...globalNumericConfig, min_exchange_amount: e.target.value })}
+                />
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 3fr', gap: 12, alignItems: 'end' }}>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label" style={{ fontSize: 12 }}>환전 수수료율 (%)</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  className="input"
+                  disabled={!user.is_admin}
+                  value={globalNumericConfig.exchange_fee_percent}
+                  onChange={(e) => setGlobalNumericConfig({ ...globalNumericConfig, exchange_fee_percent: e.target.value })}
+                />
+              </div>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label" style={{ fontSize: 12 }}>랭킹 보드 상단 안내 문구</label>
+                <input
+                  type="text"
+                  className="input"
+                  value={globalNumericConfig.ranking_board_notice || ''}
+                  onChange={(e) => setGlobalNumericConfig({ ...globalNumericConfig, ranking_board_notice: e.target.value })}
+                />
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}>
+              <button type="submit" className="btn btn-primary">
+                전역 수치 및 배율 일괄 적용
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* 📊 SQLite 연방 포인트/크레딧 입출금 상세 원장 & CSV/XLSX 다운로드 ('데이터 관리' 권한 전용) */}
+      {canManageData && (
+        <div className="card" style={{ marginBottom: 28, border: '1px solid #a7f3d0' }}>
+          <div className="card-header" style={{ flexWrap: 'wrap', gap: 10 }}>
+            <div className="card-title">
+              <FileSpreadsheet size={20} color="#059669" />
+              <span>연방 포인트/크레딧 입출금 상세 원장 (SQLite DB & CSV/XLSX 추출)</span>
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => setShowManualTxModal(true)}
+              >
+                <Plus size={14} /> 수동 입출금 내역 추가/정산
+              </button>
+              <button
+                type="button"
+                className="btn btn-success btn-sm"
+                onClick={() => handleDownloadLedger('csv')}
+              >
+                <Download size={14} /> CSV 다운로드 (.csv)
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={() => handleDownloadLedger('xlsx')}
+              >
+                <FileSpreadsheet size={14} /> 엑셀 다운로드 (.xlsx)
+              </button>
+            </div>
+          </div>
+
+          <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 14 }}>
+            내장 SQLite 데이터베이스(`asset_transactions`)에 기록된 모든 연방 포인트 및 크레딧 입금·출금·조정 내역입니다. 필터링 후 <strong>CSV</strong> 또는 <strong>XLSX(엑셀)</strong> 파일로 즉시 다운로드할 수 있습니다.
+          </p>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1.5fr auto', gap: 10, marginBottom: 14, padding: 12, background: 'var(--bg-secondary)', borderRadius: 10 }}>
+            <select
+              className="input"
+              value={txFilter.asset_type}
+              onChange={(e) => {
+                const next = { ...txFilter, asset_type: e.target.value };
+                setTxFilter(next);
+                loadTransactions(next);
+              }}
+            >
+              <option value="ALL">전체 자산 (포인트 + 크레딧)</option>
+              <option value="POINT">연방 포인트 (P)</option>
+              <option value="CREDIT">크레딧 (C)</option>
+            </select>
+
+            <select
+              className="input"
+              value={txFilter.tx_type}
+              onChange={(e) => {
+                const next = { ...txFilter, tx_type: e.target.value };
+                setTxFilter(next);
+                loadTransactions(next);
+              }}
+            >
+              <option value="ALL">전체 구분 (입금 + 출금)</option>
+              <option value="IN">입금 (+)</option>
+              <option value="OUT">출금 (-)</option>
+            </select>
+
+            <input
+              type="text"
+              className="input"
+              placeholder="닉네임, 아이디, 사유, 처리자 검색..."
+              value={txFilter.search}
+              onChange={(e) => setTxFilter({ ...txFilter, search: e.target.value })}
+            />
+
+            <button type="button" className="btn btn-primary" onClick={() => loadTransactions(txFilter)}>
+              조회
+            </button>
+          </div>
+
+          <div className="table-container" style={{ maxHeight: 360, overflowY: 'auto' }}>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>번호</th>
+                  <th>일시</th>
+                  <th>대상 유저</th>
+                  <th>자산</th>
+                  <th>구분</th>
+                  <th>변동 수량</th>
+                  <th>변동 전 → 후</th>
+                  <th>카테고리 & 상세 사유</th>
+                  <th>처리자</th>
+                </tr>
+              </thead>
+              <tbody>
+                {transactions.length === 0 ? (
+                  <tr>
+                    <td colSpan={9} style={{ textAlign: 'center', padding: 24, color: '#64748b' }}>
+                      조건에 해당하는 입출금 기록이 없습니다.
+                    </td>
+                  </tr>
+                ) : (
+                  transactions.map((t) => {
+                    const isPoint = t.asset_type === 'POINT' || t.asset_type === 'POINTS';
+                    const isPositive = t.tx_type ? t.tx_type === 'IN' : (t.amount >= 0);
+                    return (
+                      <tr key={t.id}>
+                        <td style={{ fontSize: 12, color: '#64748b' }}>#{t.id}</td>
+                        <td style={{ fontSize: 12, color: '#64748b', whiteSpace: 'nowrap' }}>{t.created_at}</td>
+                        <td>
+                          <span style={{ fontWeight: 700 }}>{t.nickname || t.username}</span>
+                          <div style={{ fontSize: 11, color: '#64748b' }}>@{t.username}</div>
+                        </td>
+                        <td>
+                          <span className="badge" style={{ background: isPoint ? '#fef3c7' : '#d1fae5', color: isPoint ? '#b45309' : '#047857' }}>
+                            {isPoint ? '포인트(P)' : '크레딧(C)'}
+                          </span>
+                        </td>
+                        <td>
+                          <span className={`badge ${isPositive ? 'badge-approved' : 'badge-rejected'}`}>
+                            {isPositive ? '입금(+)' : '출금(-)'}
+                          </span>
+                        </td>
+                        <td>
+                          <span style={{ fontWeight: 800, color: isPositive ? '#059669' : '#dc2626' }}>
+                            {isPositive ? '+' : '-'}{Math.abs(Number(t.amount) || 0).toLocaleString()} {isPoint ? 'P' : 'C'}
+                          </span>
+                        </td>
+                        <td style={{ fontSize: 12, color: '#64748b', whiteSpace: 'nowrap' }}>
+                          {Number(t.balance_before || 0).toLocaleString()} → <strong>{Number(t.balance_after || 0).toLocaleString()}</strong>
+                        </td>
+                        <td style={{ fontSize: 12 }}>
+                          <span style={{ fontWeight: 700, color: '#1e293b', marginRight: 6 }}>[{t.category}]</span>
+                          <span>{t.description}</span>
+                        </td>
+                        <td style={{ fontSize: 12, color: '#475569' }}>{t.actor_name || '시스템'}</td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* 🛡️ 디스코드 스타일 역할 생성·권한·위계 순서 관리 스튜디오 */}
+      {(user.is_admin || canManageRoles || canManageAccounts) && (
+        <RoleManager
+          user={user}
+          users={approvedUsers}
+          refreshKey={roleRefreshKey}
+          onChanged={() => {
+            loadData();
+            if (refreshUser) refreshUser();
+          }}
+        />
+      )}
+
+      {/* 4. 승인된 사용자 및 개인별 디스코드 역할(랭크) 부여 */}
       <div className="card">
         <div className="card-header">
           <div className="card-title">
             <Users size={20} color="#60a5fa" />
-            <span>사용자 목록 및 세분화 역할 관리</span>
+            <span>사용자 목록 및 개인별 역할(랭크) 부여</span>
           </div>
+          <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+            각 사용자에게 디스코드처럼 역할을 클릭해 부여하거나 해제할 수 있습니다 (위쪽 서열 역할부터 표시)
+          </span>
         </div>
 
         <div className="table-container">
           <table className="table">
             <thead>
               <tr>
-                <th>사용자</th>
+                <th>사용자 & 대표 역할</th>
                 <th>상태</th>
                 {user.is_admin && <th>슈퍼관리자</th>}
                 <th>보유 재화</th>
-                <th>세부 권한 역할 (클릭하여 토글)</th>
+                <th>개인별 부여 역할 (클릭하여 토글)</th>
                 <th>작업</th>
               </tr>
             </thead>
             <tbody>
-              {approvedUsers.map((u) => (
+              {approvedUsers.map((u) => {
+                const topRole = u.roles?.[0];
+                return (
                 <tr key={u.id}>
                   <td>
                     <div>
-                      <span style={{ fontWeight: 600 }}>{u.nickname || u.username}</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                        <span style={{ fontWeight: 700, color: topRole?.color && topRole.color !== '#99aab5' ? topRole.color : undefined }}>
+                          {u.nickname || u.username}
+                        </span>
+                        {topRole && (
+                          <span
+                            className="badge"
+                            style={{
+                              background: `${topRole.color}20`,
+                              color: topRole.color,
+                              border: `1px solid ${topRole.color}55`,
+                              fontSize: 10,
+                              fontWeight: 700
+                            }}
+                          >
+                            ● {topRole.name}
+                          </span>
+                        )}
+                        {u.custom_title && (
+                          <span className="badge" style={{ background: '#eff6ff', color: '#1d4ed8', fontSize: 10 }}>
+                            {u.custom_title}
+                          </span>
+                        )}
+                      </div>
                       <div style={{ fontSize: 11, color: '#64748b' }}>@{u.username}</div>
                       {u.must_change_password && (
                         <span style={{ fontSize: 11, color: '#f59e0b' }}>⚠️ 비번 변경 필요</span>
@@ -945,52 +1362,82 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
                   )}
                   <td>
                     <div style={{ fontSize: 12 }}>
-                      <span style={{ color: '#fbbf24', fontWeight: 600 }}>{u.points.toLocaleString()} P</span>
+                      <span style={{ color: '#fbbf24', fontWeight: 600 }}>{(u.points ?? 0).toLocaleString()} P</span>
                       <br />
-                      <span style={{ color: '#34d399', fontWeight: 600 }}>{u.credits.toLocaleString()} C</span>
+                      <span style={{ color: '#34d399', fontWeight: 600 }}>{(u.credits ?? 0).toLocaleString()} C</span>
                     </div>
                   </td>
                   <td>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxWidth: 580 }}>
-                      {ALL_ROLES.map((role) => {
-                        const hasRole = u.roles?.includes(role);
-                        return (
-                          <button
-                            key={role}
-                            type="button"
-                            disabled={!user.is_admin}
-                            onClick={() => handleToggleRole(u, role)}
-                            style={{
-                              padding: '3px 8px',
-                              borderRadius: 6,
-                              fontSize: 11,
-                              fontWeight: 600,
-                              cursor: user.is_admin ? 'pointer' : 'default',
-                              border: hasRole ? '1px solid #3b82f6' : '1px solid rgba(255,255,255,0.1)',
-                              background: hasRole ? 'rgba(59, 130, 246, 0.25)' : 'rgba(255,255,255,0.02)',
-                              color: hasRole ? '#60a5fa' : '#64748b',
-                              transition: 'all 0.15s ease'
-                            }}
-                          >
-                            {hasRole ? `✓ ${role}` : `+ ${role}`}
-                          </button>
-                        );
-                      })}
+                      {allRoles.length === 0 ? (
+                        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                          위 [역할 관리]에서 역할을 먼저 만들어 주세요.
+                        </span>
+                      ) : (
+                        allRoles.map((roleObj) => {
+                          const hasRole = u.roles?.some(r => r.id === roleObj.id);
+                          const canToggle = (user.is_admin || canManageRoles) && roleObj.manageable && (!u.is_admin || user.is_admin);
+                          const roleColor = roleObj.color || '#64748b';
+                          return (
+                            <button
+                              key={roleObj.id}
+                              type="button"
+                              disabled={!canToggle}
+                              onClick={() => handleToggleRole(u, roleObj)}
+                              title={
+                                roleObj.permissions?.length
+                                  ? `포함 권한: ${roleObj.permissions.join(', ')}`
+                                  : '권한 없음 (순수 랭크/칭호 역할)'
+                              }
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 5,
+                                padding: '4px 10px',
+                                borderRadius: 999,
+                                fontSize: 11,
+                                fontWeight: 700,
+                                cursor: canToggle ? 'pointer' : 'default',
+                                border: hasRole ? `1.5px solid ${roleColor}` : '1px solid var(--border-color)',
+                                background: hasRole ? `${roleColor}22` : 'var(--bg-secondary)',
+                                color: hasRole ? roleColor : 'var(--text-muted)',
+                                opacity: !canToggle && !hasRole ? 0.55 : 1,
+                                transition: 'all 0.15s ease'
+                              }}
+                            >
+                              <span style={{ width: 8, height: 8, borderRadius: '50%', background: roleColor }} />
+                              <span>{hasRole ? `✓ ${roleObj.name}` : `+ ${roleObj.name}`}</span>
+                            </button>
+                          );
+                        })
+                      )}
                     </div>
+                    {u.permissions?.length > 0 && (
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
+                        활성 권한: {u.permissions.join(' · ')}
+                      </div>
+                    )}
                   </td>
                   <td>
                     <div style={{ display: 'flex', gap: 6 }}>
-                      {user.is_admin && (
+                      {(user.is_admin || canManageAccounts) && (
                         <button
                           className="btn btn-secondary btn-sm"
                           onClick={() => {
                             setSelectedUser(u);
-                            setAssetForm({ points: u.points, credits: u.credits });
+                            setAssetForm({
+                              points: u.points,
+                              credits: u.credits,
+                              nickname: u.nickname || u.username,
+                              custom_title: u.custom_title || '',
+                              reason: '',
+                              sync_active_season: true
+                            });
                             setShowAssetModal(true);
                           }}
-                          title="포인트/크레딧 수정"
+                          title="프로필 및 포인트/크레딧 정밀 수정"
                         >
-                          <DollarSign size={13} />
+                          <DollarSign size={13} /> 수치·칭호 수정
                         </button>
                       )}
                       <button
@@ -1012,7 +1459,8 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
                     </div>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -1080,42 +1528,172 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
         </div>
       )}
 
-      {/* 재화 수정 모달 */}
+      {/* 재화 및 프로필 정밀 수정 모달 */}
       {showAssetModal && selectedUser && (
         <div className="modal-overlay">
           <div className="modal-content">
             <h2 style={{ fontSize: 18, fontWeight: 700, marginBottom: 16 }}>
-              [{selectedUser.nickname || selectedUser.username}] 재화 수동 조정
+              [{selectedUser.nickname || selectedUser.username}] 재화 및 프로필 정밀 조정
             </h2>
             <form onSubmit={handleSaveAssets}>
-              <div className="form-group">
-                <label className="form-label">연방 포인트</label>
-                <input
-                  type="number"
-                  className="input"
-                  value={assetForm.points}
-                  onChange={(e) => setAssetForm({ ...assetForm, points: e.target.value })}
-                  required
-                />
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <div className="form-group">
+                  <label className="form-label">인게임 닉네임</label>
+                  <input
+                    type="text"
+                    className="input"
+                    value={assetForm.nickname}
+                    onChange={(e) => setAssetForm({ ...assetForm, nickname: e.target.value })}
+                  />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">전역 커스텀 칭호</label>
+                  <input
+                    type="text"
+                    className="input"
+                    placeholder="예: 국가 영웅, 재정관"
+                    value={assetForm.custom_title}
+                    onChange={(e) => setAssetForm({ ...assetForm, custom_title: e.target.value })}
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <div className="form-group">
+                  <label className="form-label">보유 연방 포인트 (P)</label>
+                  <input
+                    type="number"
+                    className="input"
+                    value={assetForm.points}
+                    onChange={(e) => setAssetForm({ ...assetForm, points: e.target.value })}
+                    required
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">보유 크레딧 (C)</label>
+                  <input
+                    type="number"
+                    className="input"
+                    value={assetForm.credits}
+                    onChange={(e) => setAssetForm({ ...assetForm, credits: e.target.value })}
+                    required
+                  />
+                </div>
               </div>
 
               <div className="form-group">
-                <label className="form-label">크레딧</label>
+                <label className="form-label">조정 사유 (SQLite 입출금 원장에 상세 기록됨)</label>
                 <input
-                  type="number"
+                  type="text"
                   className="input"
-                  value={assetForm.credits}
-                  onChange={(e) => setAssetForm({ ...assetForm, credits: e.target.value })}
-                  required
+                  placeholder="예: 이벤트 보상 지급, 오지급 정정 등"
+                  value={assetForm.reason}
+                  onChange={(e) => setAssetForm({ ...assetForm, reason: e.target.value })}
                 />
               </div>
+
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer', marginBottom: 16 }}>
+                <input
+                  type="checkbox"
+                  checked={assetForm.sync_active_season}
+                  onChange={(e) => setAssetForm({ ...assetForm, sync_active_season: e.target.checked })}
+                />
+                <span>포인트 변동분을 현재 활성 시즌 랭킹 점수에도 함께 반영</span>
+              </label>
 
               <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
                 <button type="button" className="btn btn-secondary" onClick={() => setShowAssetModal(false)} style={{ flex: 1 }}>
                   취소
                 </button>
                 <button type="submit" className="btn btn-primary" style={{ flex: 1 }}>
-                  저장
+                  저장 및 원장 기록
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 수동 입출금 내역 추가/정산 모달 */}
+      {showManualTxModal && (
+        <div className="modal-overlay">
+          <div className="modal-content">
+            <h2 style={{ fontSize: 18, fontWeight: 700, marginBottom: 16 }}>
+              수동 포인트/크레딧 입출금 원장 기록 및 정산
+            </h2>
+            <form onSubmit={handleCreateManualTx}>
+              <div className="form-group">
+                <label className="form-label">대상 유저 선택</label>
+                <select
+                  className="input"
+                  value={manualTxForm.user_id}
+                  onChange={(e) => setManualTxForm({ ...manualTxForm, user_id: e.target.value })}
+                  required
+                >
+                  <option value="">-- 유저를 선택하세요 --</option>
+                  {approvedUsers.map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {u.nickname || u.username} (@{u.username}) - 보유: {u.points.toLocaleString()}P / {u.credits.toLocaleString()}C
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <div className="form-group">
+                  <label className="form-label">자산 종류</label>
+                  <select
+                    className="input"
+                    value={manualTxForm.asset_type}
+                    onChange={(e) => setManualTxForm({ ...manualTxForm, asset_type: e.target.value })}
+                  >
+                    <option value="POINT">연방 포인트 (P)</option>
+                    <option value="CREDIT">크레딧 (C)</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">입출금 수량 (+입금 / -출금)</label>
+                  <input
+                    type="number"
+                    className="input"
+                    placeholder="예: 500 또는 -200"
+                    value={manualTxForm.amount}
+                    onChange={(e) => setManualTxForm({ ...manualTxForm, amount: e.target.value })}
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">카테고리</label>
+                <input
+                  type="text"
+                  className="input"
+                  value={manualTxForm.category}
+                  onChange={(e) => setManualTxForm({ ...manualTxForm, category: e.target.value })}
+                  required
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">상세 내역 설명</label>
+                <input
+                  type="text"
+                  className="input"
+                  placeholder="예: 전쟁 승리 특별 포상금 지급"
+                  value={manualTxForm.description}
+                  onChange={(e) => setManualTxForm({ ...manualTxForm, description: e.target.value })}
+                  required
+                />
+              </div>
+
+              <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
+                <button type="button" className="btn btn-secondary" onClick={() => setShowManualTxModal(false)} style={{ flex: 1 }}>
+                  취소
+                </button>
+                <button type="submit" className="btn btn-primary" style={{ flex: 1 }}>
+                  반영 및 원장 기록
                 </button>
               </div>
             </form>

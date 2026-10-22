@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { apiRequest } from '../api';
-import { Briefcase, Plus, CheckCircle, Clock, AlertCircle, Pickaxe, Users, Send } from 'lucide-react';
+import { Briefcase, Plus, CheckCircle, Clock, AlertCircle, Pickaxe, Users, Send, Edit2, Trash2 } from 'lucide-react';
 
 export default function GigTab({ user, refreshUser }) {
   const [jobs, setJobs] = useState([]);
@@ -8,9 +8,14 @@ export default function GigTab({ user, refreshUser }) {
 
   // 모달 상태
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [editingJob, setEditingJob] = useState(null);
   const [showApproveModal, setShowApproveModal] = useState(false);
   const [targetJob, setTargetJob] = useState(null);
   const [federationPointsInput, setFederationPointsInput] = useState(20);
+
+  // 최종 지급 심사 시 수치 커스텀 조절
+  const [finalPayMap, setFinalPayMap] = useState({});
+  const [finalPtsMap, setFinalPtsMap] = useState({});
 
   // 구인 등록 폼 ('사업가' 권한)
   const [form, setForm] = useState({
@@ -18,19 +23,30 @@ export default function GigTab({ user, refreshUser }) {
     custom_work_type: '',
     description: '',
     pay_credit: 1000,
+    federation_points: 20,
     work_date: '',
     duration_text: '약 1시간 소요',
-    notes: ''
+    notes: '',
+    status: 'pending_approval'
   });
 
-  const canCreateGig = user.is_admin || user.roles?.includes('사업가');
-  const canManageCorporate = user.is_admin || user.roles?.includes('기업 관리');
+  const canCreateGig = user.is_admin || user.permissions?.includes('사업가');
+  const canManageCorporate = user.is_admin || user.permissions?.includes('기업 관리');
 
   const loadData = async () => {
     try {
       setLoading(true);
       const data = await apiRequest('/jobs');
       setJobs(data);
+
+      const defaultPay = {};
+      const defaultPts = {};
+      data.forEach(j => {
+        defaultPay[j.id] = j.pay_credit;
+        defaultPts[j.id] = j.federation_points;
+      });
+      setFinalPayMap(prev => ({ ...defaultPay, ...prev }));
+      setFinalPtsMap(prev => ({ ...defaultPts, ...prev }));
     } catch (err) {
       console.error(err);
     } finally {
@@ -45,21 +61,42 @@ export default function GigTab({ user, refreshUser }) {
   const handleCreateJob = async (e) => {
     e.preventDefault();
     try {
-      await apiRequest('/jobs', {
-        method: 'POST',
-        body: JSON.stringify(form)
-      });
-      alert('알바 구인 등록이 신청되었습니다! 기업 관리자가 연방 포인트를 책정하면 공고가 게시됩니다.');
+      if (editingJob) {
+        await apiRequest(`/jobs/${editingJob.id}`, {
+          method: 'PUT',
+          body: JSON.stringify(form)
+        });
+        alert('단기 알바 공고 및 보수/포인트 수치가 수정되었습니다.');
+      } else {
+        await apiRequest('/jobs', {
+          method: 'POST',
+          body: JSON.stringify(form)
+        });
+        alert('알바 구인 등록이 신청되었습니다! 기업 관리자가 연방 포인트를 책정하면 공고가 게시됩니다.');
+      }
       setShowCreateModal(false);
+      setEditingJob(null);
       setForm({
         work_type: '광질',
         custom_work_type: '',
         description: '',
         pay_credit: 1000,
+        federation_points: 20,
         work_date: '',
         duration_text: '약 1시간 소요',
-        notes: ''
+        notes: '',
+        status: 'pending_approval'
       });
+      loadData();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const handleDeleteJob = async (jobId) => {
+    if (!confirm('이 단기 알바 공고를 삭제하시겠습니까?')) return;
+    try {
+      await apiRequest(`/jobs/${jobId}`, { method: 'DELETE' });
       loadData();
     } catch (err) {
       alert(err.message);
@@ -108,12 +145,20 @@ export default function GigTab({ user, refreshUser }) {
   };
 
   // 기업 관리자 최종 지급 확인
-  const handleFinalize = async (jobId, decision) => {
-    if (!confirm(`노동 여부를 확인하고 ${decision === 'approve' ? '최종 보수 및 포인트를 지급' : '취소/반려'}하시겠습니까?`)) return;
+  const handleFinalize = async (job, decision) => {
+    const jobId = job.id;
+    const customPay = finalPayMap[jobId] ?? job.pay_credit;
+    const customPts = finalPtsMap[jobId] ?? job.federation_points;
+
+    if (!confirm(`노동 여부를 확인하고 ${decision === 'approve' ? `최종 보수(+${Number(customPay).toLocaleString()}C) 및 포인트(+${Number(customPts)}P)를 지급` : '취소/반려'}하시겠습니까?`)) return;
     try {
       const res = await apiRequest(`/jobs/${jobId}/finalize`, {
         method: 'PUT',
-        body: JSON.stringify({ decision })
+        body: JSON.stringify({
+          decision,
+          custom_pay_credit: customPay,
+          custom_federation_points: customPts
+        })
       });
       alert(res.message);
       loadData();
@@ -128,17 +173,34 @@ export default function GigTab({ user, refreshUser }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
         <div>
           <h2 style={{ fontSize: 20, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 10 }}>
-            <Briefcase color="#38bdf8" size={24} />
+            <Briefcase color="var(--primary)" size={24} />
             <span>단기 알바 구인 & 매칭</span>
           </h2>
-          <p style={{ color: '#94a3b8', fontSize: 13, marginTop: 4 }}>
+          <p style={{ color: 'var(--text-muted)', fontSize: 13, marginTop: 4 }}>
             사업가는 노동력을 구인하고, 구직자는 크레딧과 연방 포인트를 획득할 수 있습니다.
           </p>
         </div>
 
-        {canCreateGig && (
-          <button className="btn btn-primary" onClick={() => setShowCreateModal(true)}>
-            <Plus size={16} /> 알바 구인 등록 (사업가)
+        {(canCreateGig || canManageCorporate) && (
+          <button
+            className="btn btn-primary"
+            onClick={() => {
+              setEditingJob(null);
+              setForm({
+                work_type: '광질',
+                custom_work_type: '',
+                description: '',
+                pay_credit: 1000,
+                federation_points: 20,
+                work_date: '',
+                duration_text: '약 1시간 소요',
+                notes: '',
+                status: 'pending_approval'
+              });
+              setShowCreateModal(true);
+            }}
+          >
+            <Plus size={16} /> 알바 구인 등록
           </button>
         )}
       </div>
@@ -146,7 +208,7 @@ export default function GigTab({ user, refreshUser }) {
       {/* 알바 목록 */}
       <div className="grid-2" style={{ marginBottom: 36 }}>
         {jobs.length === 0 ? (
-          <div style={{ gridColumn: '1 / -1', padding: 40, textAlign: 'center', color: '#64748b' }}>
+          <div style={{ gridColumn: '1 / -1', padding: 40, textAlign: 'center', color: 'var(--text-muted)' }}>
             등록된 알바 공고가 없습니다.
           </div>
         ) : (
@@ -162,44 +224,77 @@ export default function GigTab({ user, refreshUser }) {
                       <span className="badge badge-role" style={{ fontSize: 13 }}>
                         {job.work_type === '기타' && job.custom_work_type ? job.custom_work_type : job.work_type}
                       </span>
-                      <span style={{ fontSize: 13, color: '#94a3b8' }}>
+                      <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>
                         구인자: {job.employer_name || job.employer_username}
                       </span>
                     </div>
 
-                    <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       {job.status === 'pending_approval' && <span className="badge badge-pending">포인트 책정 대기</span>}
                       {job.status === 'open' && <span className="badge badge-approved">구인 중</span>}
                       {job.status === 'in_progress' && <span className="badge badge-role">작업 진행 중</span>}
                       {job.status === 'both_done_pending_review' && <span className="badge badge-pending">최종 지급 심사 중</span>}
                       {job.status === 'completed' && <span className="badge badge-approved">지급 완료</span>}
                       {job.status === 'cancelled' && <span className="badge badge-rejected">취소됨</span>}
+
+                      {(canManageCorporate || isEmployer) && (
+                        <>
+                          <button
+                            onClick={() => {
+                              setEditingJob(job);
+                              setForm({
+                                work_type: job.work_type,
+                                custom_work_type: job.custom_work_type || '',
+                                description: job.description,
+                                pay_credit: job.pay_credit,
+                                federation_points: job.federation_points || 0,
+                                work_date: job.work_date,
+                                duration_text: job.duration_text,
+                                notes: job.notes || '',
+                                status: job.status
+                              });
+                              setShowCreateModal(true);
+                            }}
+                            style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer' }}
+                            title="공고 및 수치 수정"
+                          >
+                            <Edit2 size={14} />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteJob(job.id)}
+                            style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer' }}
+                            title="삭제"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </>
+                      )}
                     </div>
                   </div>
 
-                  <p style={{ fontSize: 14, color: '#f1f5f9', whiteSpace: 'pre-line', marginBottom: 14 }}>
+                  <p style={{ fontSize: 14, color: 'var(--text-main)', whiteSpace: 'pre-line', marginBottom: 14, fontWeight: 500 }}>
                     {job.description}
                   </p>
 
-                  <div style={{ background: 'rgba(255, 255, 255, 0.03)', padding: 12, borderRadius: 8, fontSize: 13, display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 16 }}>
+                  <div style={{ background: 'var(--bg-tertiary)', padding: 12, borderRadius: 8, fontSize: 13, display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 16 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span style={{ color: '#94a3b8' }}>일시</span>
-                      <span>{job.work_date}</span>
+                      <span style={{ color: 'var(--text-muted)' }}>일시</span>
+                      <span style={{ fontWeight: 600 }}>{job.work_date}</span>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span style={{ color: '#94a3b8' }}>지속 기간</span>
-                      <span>{job.duration_text}</span>
+                      <span style={{ color: 'var(--text-muted)' }}>지속 기간</span>
+                      <span style={{ fontWeight: 600 }}>{job.duration_text}</span>
                     </div>
                     {job.notes && (
                       <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <span style={{ color: '#94a3b8' }}>특이사항</span>
-                        <span style={{ color: '#cbd5e1' }}>{job.notes}</span>
+                        <span style={{ color: 'var(--text-muted)' }}>특이사항</span>
+                        <span style={{ color: 'var(--text-secondary)' }}>{job.notes}</span>
                       </div>
                     )}
                     {job.worker_name && (
                       <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <span style={{ color: '#94a3b8' }}>채용된 구직자</span>
-                        <span style={{ color: '#38bdf8', fontWeight: 600 }}>{job.worker_name}</span>
+                        <span style={{ color: 'var(--text-muted)' }}>채용된 구직자</span>
+                        <span style={{ color: 'var(--primary)', fontWeight: 700 }}>{job.worker_name}</span>
                       </div>
                     )}
                   </div>
@@ -222,6 +317,7 @@ export default function GigTab({ user, refreshUser }) {
                       style={{ width: '100%' }}
                       onClick={() => {
                         setTargetJob(job);
+                        setFederationPointsInput(job.federation_points || 20);
                         setShowApproveModal(true);
                       }}
                     >
@@ -243,7 +339,7 @@ export default function GigTab({ user, refreshUser }) {
                   {/* 3) 진행 중: 완료 버튼 (사업가 / 구직자) */}
                   {(job.status === 'in_progress' || job.status === 'both_done_pending_review') && (isEmployer || isWorker) && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                      <div style={{ fontSize: 12, color: '#94a3b8', textAlign: 'center' }}>
+                      <div style={{ fontSize: 12, color: 'var(--text-muted)', textAlign: 'center' }}>
                         고용주 완료: {job.employer_completed ? '✅ 완료' : '⏳ 미완료'} | 구직자 완료: {job.worker_completed ? '✅ 완료' : '⏳ 미완료'}
                       </div>
                       {((isEmployer && !job.employer_completed) || (isWorker && !job.worker_completed)) && (
@@ -258,23 +354,47 @@ export default function GigTab({ user, refreshUser }) {
                     </div>
                   )}
 
-                  {/* 4) 기업 관리자의 최종 지급 승인 */}
+                  {/* 4) 기업 관리자의 최종 지급 승인 (수치 직접 조절 가능) */}
                   {job.status === 'both_done_pending_review' && canManageCorporate && (
-                    <div style={{ display: 'flex', gap: 8 }}>
-                      <button
-                        className="btn btn-success"
-                        style={{ flex: 1 }}
-                        onClick={() => handleFinalize(job.id, 'approve')}
-                      >
-                        최종 승인 & 포인트/페이 지급
-                      </button>
-                      <button
-                        className="btn btn-danger"
-                        style={{ flex: 1 }}
-                        onClick={() => handleFinalize(job.id, 'reject')}
-                      >
-                        반려/취소
-                      </button>
+                    <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border-color)' }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
+                        <div>
+                          <label style={{ fontSize: 11, color: 'var(--text-muted)' }}>최종 지급 크레딧(C)</label>
+                          <input
+                            type="number"
+                            className="input"
+                            style={{ padding: '4px 8px', fontSize: 12 }}
+                            value={finalPayMap[job.id] ?? job.pay_credit}
+                            onChange={(e) => setFinalPayMap({ ...finalPayMap, [job.id]: e.target.value })}
+                          />
+                        </div>
+                        <div>
+                          <label style={{ fontSize: 11, color: 'var(--text-muted)' }}>최종 지급 포인트(P)</label>
+                          <input
+                            type="number"
+                            className="input"
+                            style={{ padding: '4px 8px', fontSize: 12 }}
+                            value={finalPtsMap[job.id] ?? job.federation_points}
+                            onChange={(e) => setFinalPtsMap({ ...finalPtsMap, [job.id]: e.target.value })}
+                          />
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <button
+                          className="btn btn-success btn-sm"
+                          style={{ flex: 1 }}
+                          onClick={() => handleFinalize(job, 'approve')}
+                        >
+                          최종 승인 & 지급
+                        </button>
+                        <button
+                          className="btn btn-danger btn-sm"
+                          style={{ flex: 1 }}
+                          onClick={() => handleFinalize(job, 'reject')}
+                        >
+                          반려/취소
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -284,12 +404,12 @@ export default function GigTab({ user, refreshUser }) {
         )}
       </div>
 
-      {/* 알바 등록 모달 ('사업가') */}
+      {/* 알바 등록/수정 모달 */}
       {showCreateModal && (
         <div className="modal-overlay">
           <div className="modal-content">
             <h2 style={{ fontSize: 18, fontWeight: 700, marginBottom: 16 }}>
-              💼 알바 구인 등록 신청 (사업가)
+              💼 {editingJob ? '알바 공고 및 수치 수정' : '알바 구인 등록 신청'}
             </h2>
             <form onSubmit={handleCreateJob}>
               <div className="form-group">
@@ -335,17 +455,31 @@ export default function GigTab({ user, refreshUser }) {
                 />
               </div>
 
-              <div className="form-group">
-                <label className="form-label">보수 페이 (크레딧)</label>
-                <input
-                  type="number"
-                  min="0"
-                  className="input"
-                  placeholder="예: 5000"
-                  value={form.pay_credit}
-                  onChange={(e) => setForm({ ...form, pay_credit: e.target.value })}
-                  required
-                />
+              <div style={{ display: 'grid', gridTemplateColumns: canManageCorporate ? '1fr 1fr' : '1fr', gap: 12 }}>
+                <div className="form-group">
+                  <label className="form-label">보수 페이 (크레딧)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    className="input"
+                    placeholder="예: 5000"
+                    value={form.pay_credit}
+                    onChange={(e) => setForm({ ...form, pay_credit: e.target.value })}
+                    required
+                  />
+                </div>
+                {canManageCorporate && (
+                  <div className="form-group">
+                    <label className="form-label">연방 포인트 (기업 관리 권한)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      className="input"
+                      value={form.federation_points}
+                      onChange={(e) => setForm({ ...form, federation_points: e.target.value })}
+                    />
+                  </div>
+                )}
               </div>
 
               <div className="form-group">

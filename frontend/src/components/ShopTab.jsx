@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { apiRequest } from '../api';
-import { ShoppingBag, Plus, CheckCircle, Trash2, Edit2, Tag } from 'lucide-react';
+import { ShoppingBag, Plus, CheckCircle, Trash2, Edit2, Tag, XCircle } from 'lucide-react';
 
 export default function ShopTab({ user, refreshUser }) {
   const [items, setItems] = useState([]);
@@ -12,7 +12,7 @@ export default function ShopTab({ user, refreshUser }) {
   const [editingItem, setEditingItem] = useState(null);
   const [newItem, setNewItem] = useState({ name: '', price: 100, stock: -1, description: '', image_url: '' });
 
-  const canManageShop = user.is_admin || user.roles?.includes('샵 관리');
+  const canManageShop = user.is_admin || user.permissions?.includes('샵 관리');
 
   const loadData = async () => {
     try {
@@ -94,6 +94,18 @@ export default function ShopTab({ user, refreshUser }) {
       await apiRequest(`/shop/orders/${orderId}/deliver`, { method: 'PUT' });
       alert('아이템 지급 처리가 완료되었습니다.');
       loadData();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const handleCancelOrder = async (orderId) => {
+    if (!confirm('이 주문을 취소하고 사용자에게 연방 포인트와 상품 재고를 환불하시겠습니까?')) return;
+    try {
+      const res = await apiRequest(`/shop/orders/${orderId}/cancel`, { method: 'PUT' });
+      alert(res.message || '주문이 취소 및 환불되었습니다.');
+      loadData();
+      if (refreshUser) refreshUser();
     } catch (err) {
       alert(err.message);
     }
@@ -252,20 +264,36 @@ export default function ShopTab({ user, refreshUser }) {
                     <td><span style={{ color: '#fbbf24', fontWeight: 700 }}>{order.points_spent.toLocaleString()} P</span></td>
                     <td style={{ fontSize: 13, color: '#94a3b8' }}>{order.created_at}</td>
                     <td>
-                      {order.status === 'pending' ? (
+                      {order.status === 'pending' && (
                         <span className="badge badge-pending">지급 대기중</span>
-                      ) : (
+                      )}
+                      {order.status === 'delivered' && (
                         <span className="badge badge-delivered">인게임 지급 완료</span>
+                      )}
+                      {order.status === 'cancelled' && (
+                        <span className="badge badge-rejected">주문 취소/환불됨</span>
                       )}
                     </td>
                     {canManageShop && (
                       <td>
                         {order.status === 'pending' ? (
-                          <button className="btn btn-success btn-sm" onClick={() => handleDeliver(order.id)}>
-                            <CheckCircle size={13} /> 지급 완료 처리
-                          </button>
+                          <div style={{ display: 'flex', gap: 6 }}>
+                            <button className="btn btn-success btn-sm" onClick={() => handleDeliver(order.id)}>
+                              <CheckCircle size={13} /> 지급 완료
+                            </button>
+                            <button className="btn btn-danger btn-sm" onClick={() => handleCancelOrder(order.id)}>
+                              <XCircle size={13} /> 취소·환불
+                            </button>
+                          </div>
+                        ) : order.status === 'delivered' ? (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span style={{ fontSize: 12, color: '#64748b' }}>지급됨</span>
+                            <button className="btn btn-secondary btn-sm" style={{ padding: '2px 8px', fontSize: 11 }} onClick={() => handleCancelOrder(order.id)}>
+                              환불 취소
+                            </button>
+                          </div>
                         ) : (
-                          <span style={{ fontSize: 12, color: '#64748b' }}>완료됨</span>
+                          <span style={{ fontSize: 12, color: '#ef4444' }}>환불 완료</span>
                         )}
                       </td>
                     )}

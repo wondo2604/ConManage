@@ -114,12 +114,12 @@ export default function App() {
     { id: 'credit', label: '크레딧 환전', icon: Coins }
   ];
 
-  const canAccessAdmin = user.is_admin || user.roles?.includes('계정 관리');
+  const canAccessAdmin = user.is_admin || ['계정 관리', '역할 관리', '데이터 관리', '랭킹 관리자', '공지 관리'].some(p => user.permissions?.includes(p));
 
   if (canAccessAdmin) {
     navItems.push({
       id: 'admin',
-      label: user.is_admin ? '슈퍼 관리자' : '계정 관리',
+      label: user.is_admin ? '슈퍼 관리자' : '관리자·데이터 센터',
       icon: ShieldCheck,
       isAdmin: true
     });
@@ -189,8 +189,11 @@ export default function App() {
                 {(user.nickname || user.username).substring(0, 1).toUpperCase()}
               </div>
               <div style={{ fontSize: 13 }}>
-                <span style={{ fontWeight: 600 }}>{user.nickname || user.username}</span>
+                <span style={{ fontWeight: 600, color: user.roles?.[0]?.color && user.roles[0].color !== '#99aab5' ? user.roles[0].color : undefined }}>{user.nickname || user.username}</span>
                 {user.is_admin && <span style={{ marginLeft: 6, color: '#fbbf24', fontSize: 11, fontWeight: 700 }}>[ADMIN]</span>}
+                {!user.is_admin && user.roles?.[0] && (
+                  <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 700, color: user.roles[0].color }}>● {user.roles[0].name}</span>
+                )}
               </div>
             </div>
 
@@ -247,7 +250,7 @@ export default function App() {
         {/* 본문 콘텐츠 바디 */}
         <main className="content-body">
           {activeTab === 'supply' && <SupplyTab user={user} refreshUser={refreshUser} />}
-          {activeTab === 'ranking' && <RankingTab user={user} />}
+          {activeTab === 'ranking' && <RankingTab user={user} refreshUser={refreshUser} />}
           {activeTab === 'shop' && <ShopTab user={user} refreshUser={refreshUser} />}
           {activeTab === 'gig' && <GigTab user={user} refreshUser={refreshUser} />}
           {activeTab === 'calendar' && <CalendarTab user={user} />}

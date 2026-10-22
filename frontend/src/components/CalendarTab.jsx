@@ -23,7 +23,7 @@ export default function CalendarTab({ user }) {
     color: '#3b82f6'
   });
 
-  const canManageSchedule = user.is_admin || user.roles?.includes('일정 관리');
+  const canManageSchedule = user.is_admin || user.permissions?.includes('일정 관리');
 
   const loadData = async () => {
     try {
