@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { apiRequest } from '../api';
-import { Shield, Plus, GripVertical, ChevronUp, ChevronDown, Trash2, Save, Lock, Users, X } from 'lucide-react';
+import { Shield, Plus, GripVertical, ChevronUp, ChevronDown, Trash2, Save, Lock, Users, X, CheckCircle2 } from 'lucide-react';
 
 const PRESET_COLORS = ['#99aab5', '#1abc9c', '#2ecc71', '#3498db', '#9b59b6', '#e91e63', '#f1c40f', '#e67e22', '#e74c3c', '#607d8b'];
 
@@ -19,6 +19,8 @@ export default function RoleManager({ user, users, onChanged, refreshKey = 0 }) 
   const [dragId, setDragId] = useState(null);
   const [memberToAdd, setMemberToAdd] = useState('');
   const [saving, setSaving] = useState(false);
+  const [autoSaveText, setAutoSaveText] = useState('💾 SQLite 실시간 자동저장');
+  const autoSaveTimerRef = useRef(null);
 
   const canManage = user.is_admin || user.permissions?.includes('역할 관리');
 
@@ -75,19 +77,46 @@ export default function RoleManager({ user, users, onChanged, refreshKey = 0 }) 
     }
   };
 
-  const handleSave = async (customForm = null) => {
+  const handleSave = async (customForm = null, isAuto = false) => {
     if (!selected) return;
     const payload = customForm || form;
+    if (!String(payload.name || '').trim()) return;
     try {
       setSaving(true);
-      await apiRequest(`/roles/${selected.id}`, { method: 'PUT', body: JSON.stringify(payload) });
-      await load();
+      setAutoSaveText('⏳ SQLite 저장 중...');
+      await apiRequest(`/roles/${selected.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ ...payload, auto_save: isAuto })
+      });
+      if (isAuto) {
+        setRoles(prev =>
+          prev.map(r =>
+            r.id === selected.id
+              ? { ...r, name: payload.name, color: payload.color, permissions: payload.permissions }
+              : r
+          )
+        );
+      } else {
+        await load();
+      }
+      setAutoSaveText(`✅ 자동 저장됨 (${new Date().toLocaleTimeString('ko-KR', { hour12: false })})`);
       onChanged?.();
     } catch (err) {
-      alert(err.message);
+      if (!isAuto) alert(err.message);
+      setAutoSaveText('⚠️ 저장 실패');
     } finally {
       setSaving(false);
     }
+  };
+
+  const triggerRoleAutoSave = (nextForm) => {
+    setForm(nextForm);
+    if (!selected || !(canManage && selected.manageable)) return;
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    setAutoSaveText('⏳ 입력 감지 · 자동 저장 대기...');
+    autoSaveTimerRef.current = setTimeout(() => {
+      handleSave(nextForm, true);
+    }, 500);
   };
 
   const handleTogglePermission = async (permKey, checked) => {
@@ -97,7 +126,7 @@ export default function RoleManager({ user, users, onChanged, refreshKey = 0 }) 
     const nextForm = { ...form, permissions: nextPerms };
     setForm(nextForm);
     // 권한 체크박스 변경 시 즉시 자동 저장하여 탭 이동 시 유실되지 않도록 처리
-    await handleSave(nextForm);
+    await handleSave(nextForm, false);
   };
 
   const handleDelete = async () => {
@@ -112,33 +141,40 @@ export default function RoleManager({ user, users, onChanged, refreshKey = 0 }) 
     }
   };
 
-  // ── 순서 변경 ──
+  // ── 순서 변경 (변경 즉시 SQLite 자동 저장) ──
+  const saveOrderImmediately = async (nextOrder) => {
+    setOrder(nextOrder);
+    try {
+      setAutoSaveText('⏳ 역할 순서 SQLite 저장 중...');
+      await apiRequest('/roles/order', { method: 'PUT', body: JSON.stringify({ order: nextOrder }) });
+      await load();
+      setAutoSaveText(`✅ 순서 자동 저장됨 (${new Date().toLocaleTimeString('ko-KR', { hour12: false })})`);
+      onChanged?.();
+    } catch (err) {
+      alert(err.message);
+      setOrder(roles.map(r => r.id));
+    }
+  };
+
   const moveRole = (id, delta) => {
     const idx = order.indexOf(id);
     const next = idx + delta;
     if (next < 0 || next >= order.length) return;
     const copy = [...order];
     [copy[idx], copy[next]] = [copy[next], copy[idx]];
-    setOrder(copy);
+    saveOrderImmediately(copy);
   };
 
   const handleDrop = (targetId) => {
     if (!dragId || dragId === targetId) return;
     const copy = order.filter(id => id !== dragId);
     copy.splice(copy.indexOf(targetId), 0, dragId);
-    setOrder(copy);
     setDragId(null);
+    saveOrderImmediately(copy);
   };
 
   const handleSaveOrder = async () => {
-    try {
-      await apiRequest('/roles/order', { method: 'PUT', body: JSON.stringify({ order }) });
-      await load();
-      onChanged?.();
-    } catch (err) {
-      alert(err.message);
-      setOrder(roles.map(r => r.id));
-    }
+    await saveOrderImmediately(order);
   };
 
   // ── 멤버 ──
@@ -176,6 +212,9 @@ export default function RoleManager({ user, users, onChanged, refreshKey = 0 }) 
         <div className="card-title">
           <Shield size={20} color="#5865f2" />
           <span>역할 관리</span>
+          <span className="badge badge-approved" style={{ marginLeft: 8, fontSize: 11 }}>
+            {autoSaveText}
+          </span>
         </div>
         {canManage && (
           <button className="btn btn-primary btn-sm" onClick={handleCreate}>
@@ -276,22 +315,22 @@ export default function RoleManager({ user, users, onChanged, refreshKey = 0 }) 
               {panel === 'display' && (
                 <div>
                   <div className="form-group">
-                    <label className="form-label">역할 이름</label>
+                    <label className="form-label">역할 이름 (입력 시 자동 저장)</label>
                     <input className="input" value={form.name} disabled={!editable}
-                      onChange={(e) => setForm({ ...form, name: e.target.value })} />
+                      onChange={(e) => triggerRoleAutoSave({ ...form, name: e.target.value })} />
                   </div>
                   <div className="form-group">
-                    <label className="form-label">역할 색상</label>
+                    <label className="form-label">역할 색상 (선택 시 자동 저장)</label>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                       {PRESET_COLORS.map(c => (
-                        <button key={c} type="button" disabled={!editable} onClick={() => setForm({ ...form, color: c })}
+                        <button key={c} type="button" disabled={!editable} onClick={() => triggerRoleAutoSave({ ...form, color: c })}
                           style={{
                             width: 28, height: 28, borderRadius: 6, background: c, cursor: editable ? 'pointer' : 'default',
                             border: form.color === c ? '3px solid var(--text-main)' : '1px solid var(--border-color)'
                           }} />
                       ))}
                       <input type="color" value={form.color} disabled={!editable}
-                        onChange={(e) => setForm({ ...form, color: e.target.value })}
+                        onChange={(e) => triggerRoleAutoSave({ ...form, color: e.target.value })}
                         style={{ width: 36, height: 30, padding: 0, border: 'none', background: 'none' }} />
                     </div>
                   </div>

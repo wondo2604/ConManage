@@ -72,6 +72,12 @@ export default function App() {
   useEffect(() => {
     refreshBranding();
     refreshUser();
+
+    // 무료 클라우드 서버 절전(슬립) 방지를 위한 주기적 Keep-Alive 핑 (4분 간격)
+    const keepAliveTimer = setInterval(() => {
+      fetch('/api/health').catch(() => {});
+    }, 4 * 60 * 1000);
+    return () => clearInterval(keepAliveTimer);
   }, []);
 
   const handleLogout = () => {

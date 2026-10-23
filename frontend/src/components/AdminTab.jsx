@@ -28,7 +28,11 @@ import {
   Sliders,
   Plus,
   History,
-  Edit2
+  Edit2,
+  Shield,
+  Search,
+  Layers,
+  X
 } from 'lucide-react';
 import RoleManager from './RoleManager';
 import WebhookManager from './WebhookManager';
@@ -54,7 +58,15 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
   const [restoreLoading, setRestoreLoading] = useState(false);
   const [testingNoticeWebhook, setTestingNoticeWebhook] = useState(false);
 
+  // 사용자 검색 및 역할 표시 방식 상태
+  const [userSearch, setUserSearch] = useState('');
+  const [roleViewMode, setRoleViewMode] = useState('select'); // 'select' (드롭다운 선택형) | 'buttons' (전체 버튼 나열형)
+  const [autoSaveStatus, setAutoSaveStatus] = useState('💾 SQLite 실시간 자동저장');
+
   const fileInputRef = useRef(null);
+  const brandingTimerRef = useRef(null);
+  const numericTimerRef = useRef(null);
+  const noticeTimerRef = useRef(null);
 
   // 브랜딩 수정 폼 (최초 admin만 가능)
   const [brandingForm, setBrandingForm] = useState({
@@ -107,6 +119,93 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
   const canManageNotices = user.is_admin || user.permissions?.includes('공지 관리');
   const canManageData = user.is_admin || user.permissions?.includes('데이터 관리');
   const canManageRanking = user.is_admin || user.permissions?.includes('랭킹 관리자') || user.permissions?.includes('시즌 관리');
+
+  const pendingUsers = users.filter(u => u.status === 'pending');
+  const approvedUsers = users.filter(u => u.status !== 'pending');
+
+  // 권한에 따라 접근 가능한 서브 탭 구성
+  const availableTabs = [
+    {
+      id: 'users',
+      label: '계정 · 가입 관리',
+      shortLabel: '계정·승인',
+      icon: Users,
+      badge: pendingUsers.length > 0 ? `대기 ${pendingUsers.length}` : `${approvedUsers.length}명`,
+      badgeAlert: pendingUsers.length > 0,
+      desc: '신규 가입 승인 심사, 전체 사용자 조회, 역할 선택 부여 및 개인별 보유 재화·칭호를 관리합니다.',
+      visible: user.is_admin || canManageAccounts || canManageRoles
+    },
+    {
+      id: 'roles',
+      label: '역할 · 권한 설정',
+      shortLabel: '역할·권한',
+      icon: Shield,
+      badge: `${allRoles.length}개`,
+      badgeAlert: false,
+      desc: '디스코드 스타일의 역할 생성, 서열(위계) 순서 배치 및 세부 권한을 관리합니다.',
+      visible: user.is_admin || canManageRoles || canManageAccounts
+    },
+    {
+      id: 'economy',
+      label: '전역 수치 · 배율',
+      shortLabel: '수치·배율',
+      icon: Sliders,
+      badge: `x${globalNumericConfig.point_multiplier || '1.0'}`,
+      badgeAlert: false,
+      desc: '서버 내 포인트·크레딧 획득 배율, 크레딧 환전 비율 및 수수료율, 랭킹 안내 문구를 정밀 제어합니다.',
+      visible: user.is_admin || canManageRanking
+    },
+    {
+      id: 'ledger',
+      label: '입출금 상세 원장',
+      shortLabel: '입출금 원장',
+      icon: FileSpreadsheet,
+      badge: `${transactions.length}건`,
+      badgeAlert: false,
+      desc: '연방 포인트 및 크레딧의 모든 입출금 기록을 조회하고 수동 정산 및 CSV/XLSX 엑셀 추출을 수행합니다.',
+      visible: canManageData
+    },
+    {
+      id: 'notices',
+      label: '공지사항 · 양식',
+      shortLabel: '공지·양식',
+      icon: Palette,
+      badge: `${notices.length || 1}종`,
+      badgeAlert: false,
+      desc: '납품 안내문 등 공지사항 본문과 전용 디스코드 웹훅 채널, 메시지 템플릿을 설정합니다.',
+      visible: user.is_admin || canManageNotices
+    },
+    {
+      id: 'webhooks',
+      label: '디스코드 웹훅 (26종)',
+      shortLabel: '웹훅 센터',
+      icon: Bell,
+      badge: '26종',
+      badgeAlert: false,
+      desc: '플랫폼 내 26종 이벤트별 디스코드 웹훅 ON/OFF, 개별 채널 URL, 멘션, 임베드 색상을 통합 제어합니다.',
+      visible: user.is_admin
+    },
+    {
+      id: 'system',
+      label: '시스템 · 백업 · 브랜딩',
+      shortLabel: '시스템·백업',
+      icon: Database,
+      badge: 'JSON',
+      badgeAlert: false,
+      desc: '국가 및 시스템 타이틀·로고 브랜딩 설정과 전체 데이터베이스(14개 테이블) JSON 백업·복원을 수행합니다.',
+      visible: user.is_admin
+    }
+  ].filter(t => t.visible);
+
+  const [activeSubTab, setActiveSubTab] = useState(() => availableTabs[0]?.id || 'users');
+
+  useEffect(() => {
+    if (availableTabs.length > 0 && !availableTabs.some(t => t.id === activeSubTab)) {
+      setActiveSubTab(availableTabs[0].id);
+    }
+  }, [availableTabs.map(t => t.id).join(',')]);
+
+  const currentTabInfo = availableTabs.find(t => t.id === activeSubTab) || availableTabs[0];
 
   const loadTransactions = async (customFilter = txFilter) => {
     if (!canManageData) return;
@@ -184,24 +283,43 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
     }
   }, [branding]);
 
-  // 브랜딩 저장 (오직 최초 admin만 가능)
-  const handleSaveBranding = async (e) => {
-    e.preventDefault();
+  // 브랜딩 저장 (오직 최초 admin만 가능) - 입력 즉시 SQLite 자동 저장 지원
+  const handleSaveBranding = async (e, customData = null, isAuto = false) => {
+    if (e && e.preventDefault) e.preventDefault();
     if (!isInitialAdmin) {
-      alert('국가 및 시스템 이름은 최초 admin 계정에서만 수정할 수 있습니다.');
+      if (!isAuto) alert('국가 및 시스템 이름은 최초 admin 계정에서만 수정할 수 있습니다.');
+      return;
+    }
+
+    const payload = customData || brandingForm;
+    if (!payload.system_title?.trim() || !payload.nation_name?.trim() || !payload.server_logo_text?.trim()) {
       return;
     }
 
     try {
+      setAutoSaveStatus('⏳ 브랜딩 SQLite 저장 중...');
       const res = await apiRequest('/settings/branding', {
         method: 'PUT',
-        body: JSON.stringify(brandingForm)
+        body: JSON.stringify(payload)
       });
-      alert(res.message);
+      setAutoSaveStatus(`✅ 자동 저장됨 (${new Date().toLocaleTimeString('ko-KR', { hour12: false })})`);
+      if (!isAuto) alert(res.message);
       if (refreshBranding) refreshBranding();
     } catch (err) {
-      alert(err.message);
+      setAutoSaveStatus('⚠️ 저장 오류');
+      if (!isAuto) alert(err.message);
     }
+  };
+
+  const updateBrandingAutoSave = (patch) => {
+    const next = { ...brandingForm, ...patch };
+    setBrandingForm(next);
+    if (!isInitialAdmin) return;
+    if (brandingTimerRef.current) clearTimeout(brandingTimerRef.current);
+    setAutoSaveStatus('⏳ 브랜딩 변경 감지 · 자동 저장 대기...');
+    brandingTimerRef.current = setTimeout(() => {
+      handleSaveBranding(null, next, true);
+    }, 600);
   };
 
   // 가입 승인 / 거절
@@ -328,34 +446,50 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
     }
   };
 
-  const handleSaveGlobalNumericConfig = async (e) => {
-    e.preventDefault();
+  const handleSaveGlobalNumericConfig = async (e, customCfg = null, isAuto = false) => {
+    if (e && e.preventDefault) e.preventDefault();
+    const cfg = customCfg || globalNumericConfig;
     try {
+      setAutoSaveStatus('⏳ 전역 수치 SQLite 저장 중...');
       await Promise.all([
         apiRequest('/ranking/config', {
           method: 'PUT',
           body: JSON.stringify({
-            point_multiplier: globalNumericConfig.point_multiplier,
-            credit_multiplier: globalNumericConfig.credit_multiplier,
-            ranking_board_notice: globalNumericConfig.ranking_board_notice
+            point_multiplier: cfg.point_multiplier,
+            credit_multiplier: cfg.credit_multiplier,
+            ranking_board_notice: cfg.ranking_board_notice
           })
         }),
         user.is_admin
           ? apiRequest('/credits/config', {
               method: 'PUT',
               body: JSON.stringify({
-                exchange_rate: globalNumericConfig.exchange_rate,
-                min_exchange_amount: globalNumericConfig.min_exchange_amount,
-                exchange_fee_percent: globalNumericConfig.exchange_fee_percent
+                exchange_rate: cfg.exchange_rate,
+                min_exchange_amount: cfg.min_exchange_amount,
+                exchange_fee_percent: cfg.exchange_fee_percent
               })
             })
           : Promise.resolve()
       ]);
-      alert('전역 수치 및 배율 설정이 저장되었습니다.');
-      loadData();
+      setAutoSaveStatus(`✅ 수치 자동 저장됨 (${new Date().toLocaleTimeString('ko-KR', { hour12: false })})`);
+      if (!isAuto) {
+        alert('전역 수치 및 배율 설정이 저장되었습니다.');
+        loadData();
+      }
     } catch (err) {
-      alert(err.message);
+      setAutoSaveStatus('⚠️ 저장 오류');
+      if (!isAuto) alert(err.message);
     }
+  };
+
+  const updateNumericConfigAutoSave = (patch) => {
+    const next = { ...globalNumericConfig, ...patch };
+    setGlobalNumericConfig(next);
+    if (numericTimerRef.current) clearTimeout(numericTimerRef.current);
+    setAutoSaveStatus('⏳ 수치 변경 감지 · 자동 저장 대기...');
+    numericTimerRef.current = setTimeout(() => {
+      handleSaveGlobalNumericConfig(null, next, true);
+    }, 550);
   };
 
   const handleDownloadLedger = async (format = 'csv') => {
@@ -401,29 +535,6 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
       setManualTxForm({ user_id: '', asset_type: 'POINT', amount: 0, category: '관리자 수동 정산', description: '' });
       loadData();
       if (refreshUser) refreshUser();
-    } catch (err) {
-      alert(err.message);
-    }
-  };
-
-  const handleSaveWebhook = async (e) => {
-    e.preventDefault();
-    try {
-      await apiRequest('/settings', {
-        method: 'POST',
-        body: JSON.stringify({ key: 'discord_webhook_url', value: settings.discord_webhook_url || '' })
-      });
-      alert('디스코드 웹훅 URL이 저장되었습니다.');
-      loadData();
-    } catch (err) {
-      alert(err.message);
-    }
-  };
-
-  const handleTestWebhook = async () => {
-    try {
-      const res = await apiRequest('/settings/test-webhook', { method: 'POST' });
-      alert(res.message);
     } catch (err) {
       alert(err.message);
     }
@@ -547,22 +658,43 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
     }
   };
 
-  // 공지사항 웹훅 및 양식 저장
-  const handleSaveNoticeWebhook = async (e, sendNow = false) => {
+  // 공지사항 웹훅 및 양식 저장 (입력 시 SQLite 자동 저장 지원)
+  const handleSaveNoticeWebhook = async (e, sendNow = false, customForm = null, isAuto = false) => {
     if (e && e.preventDefault) e.preventDefault();
+    const payload = customForm || noticeWebhookForm;
+    if (!payload.title?.trim() || !payload.content?.trim()) return;
     try {
+      setAutoSaveStatus('⏳ 공지사항 SQLite 저장 중...');
       const res = await apiRequest(`/notices/${selectedNoticeCategory}`, {
         method: 'PUT',
         body: JSON.stringify({
-          ...noticeWebhookForm,
-          send_now: sendNow
+          ...payload,
+          send_now: sendNow,
+          auto_save: isAuto
         })
       });
-      alert(res.message || '공지사항 및 웹훅 설정이 저장되었습니다.');
-      loadData();
+      setNotices(prev =>
+        prev.map(n => (n.category === selectedNoticeCategory ? { ...n, ...payload } : n))
+      );
+      setAutoSaveStatus(`✅ 공지 자동 저장됨 (${new Date().toLocaleTimeString('ko-KR', { hour12: false })})`);
+      if (!isAuto) {
+        alert(res.message || '공지사항 및 웹훅 설정이 저장되었습니다.');
+        loadData();
+      }
     } catch (err) {
-      alert(err.message);
+      setAutoSaveStatus('⚠️ 저장 오류');
+      if (!isAuto) alert(err.message);
     }
+  };
+
+  const updateNoticeFormAutoSave = (patch) => {
+    const next = { ...noticeWebhookForm, ...patch };
+    setNoticeWebhookForm(next);
+    if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
+    setAutoSaveStatus('⏳ 공지 변경 감지 · 자동 저장 대기...');
+    noticeTimerRef.current = setTimeout(() => {
+      handleSaveNoticeWebhook(null, false, next, true);
+    }, 600);
   };
 
   // 공지사항 웹훅 테스트
@@ -581,435 +713,596 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
     }
   };
 
-  const pendingUsers = users.filter(u => u.status === 'pending');
-  const approvedUsers = users.filter(u => u.status !== 'pending');
+  const filteredApprovedUsers = approvedUsers.filter(u => {
+    const q = userSearch.trim().toLowerCase();
+    if (!q) return true;
+    const matchName = (u.nickname || '').toLowerCase().includes(q) || (u.username || '').toLowerCase().includes(q);
+    const matchTitle = (u.custom_title || '').toLowerCase().includes(q);
+    const matchRole = (u.roles || []).some(r => (r.name || '').toLowerCase().includes(q));
+    return matchName || matchTitle || matchRole;
+  });
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+      {/* 상단 타이틀 & 우측 탭 선택 컨트롤 바 */}
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'flex-start',
+          marginBottom: 18,
+          flexWrap: 'wrap',
+          gap: 16
+        }}
+      >
         <div>
-          <h2 style={{ fontSize: 20, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 10 }}>
+          <h2 style={{ fontSize: 20, fontWeight: 800, display: 'flex', alignItems: 'center', gap: 10 }}>
             <ShieldCheck color="#f59e0b" size={24} />
-            <span>{user.is_admin ? '슈퍼 관리자 시스템 제어 패널' : '계정 관리 패널'}</span>
+            <span>{user.is_admin ? '슈퍼 관리자 시스템 제어 패널' : '관리자 · 데이터 제어 센터'}</span>
           </h2>
-          <p style={{ color: '#94a3b8', fontSize: 13, marginTop: 4 }}>
-            신규 가입자 승인 심사, 슈퍼 관리자 생성 및 디스코드 스타일의 세분화된 역할을 관리합니다.
+          <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginTop: 4 }}>
+            {currentTabInfo?.desc || '우측 탭 또는 선택 메뉴를 통해 원하는 관리 카테고리로 빠르게 이동하세요.'}
           </p>
         </div>
 
-        {/* 슈퍼 관리자만 새 슈퍼관리자 생성 가능 */}
-        {user.is_admin && (
-          <button className="btn btn-primary" onClick={() => setShowSuperAdminModal(true)}>
-            <Crown size={16} /> 새 슈퍼 관리자 계정 생성
-          </button>
-        )}
-      </div>
+        {/* 오른쪽: 실시간 자동저장 상태 + 빠른 탭 선택 드롭다운 & 새 슈퍼관리자 생성 버튼 */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <span
+            className="badge badge-approved"
+            style={{ padding: '7px 12px', fontSize: 12, fontWeight: 700 }}
+            title="수정하는 모든 항목이 SQLite 데이터베이스에 실시간으로 자동 저장됩니다."
+          >
+            {autoSaveStatus}
+          </span>
 
-      {/* 🏛️ 1. 국가 및 시스템 브랜딩 설정 (오직 최초 admin 계정에서만 표시 및 수정 가능) */}
-      {isInitialAdmin ? (
-        <div className="card" style={{ border: '1px solid var(--border-color)', background: '#ffffff', marginBottom: 28, boxShadow: 'var(--shadow-sm)' }}>
-          <div className="card-header">
-            <div className="card-title">
-              <Globe size={20} color="var(--primary)" />
-              <span>국가 및 시스템 이름 설정 (최초 admin 전용)</span>
-            </div>
-            <span className="badge badge-approved">👑 최초 admin 권한 인증됨</span>
-          </div>
-          <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 16, lineHeight: 1.5 }}>
-            웹사이트 전역(사이드바, 헤더, 로그인 화면)에 노출되는 국가 이름, 시스템 타이틀, 로고 심볼을 오직 최초 admin 계정에서만 변경할 수 있습니다.
-          </p>
-
-          <form onSubmit={handleSaveBranding}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1.5fr 1fr', gap: 16 }}>
-              <div className="form-group">
-                <label className="form-label">시스템 이름 (영문/한글)</label>
-                <input
-                  type="text"
-                  className="input"
-                  placeholder="예: FEDERATION, ARCADIA"
-                  value={brandingForm.system_title}
-                  onChange={(e) => setBrandingForm({ ...brandingForm, system_title: e.target.value })}
-                  required
-                />
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">국가 이름 (한글)</label>
-                <input
-                  type="text"
-                  className="input"
-                  placeholder="예: 마인크래프트 연방 국가, 아르카디아 제국"
-                  value={brandingForm.nation_name}
-                  onChange={(e) => setBrandingForm({ ...brandingForm, nation_name: e.target.value })}
-                  required
-                />
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">서버 로고 심볼 (1~2글자)</label>
-                <input
-                  type="text"
-                  maxLength="4"
-                  className="input"
-                  placeholder="예: M, ⚔️, A"
-                  value={brandingForm.server_logo_text}
-                  onChange={(e) => setBrandingForm({ ...brandingForm, server_logo_text: e.target.value })}
-                  required
-                />
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
-              <button type="submit" className="btn btn-primary">
-                국가 & 시스템 이름 저장 적용
-              </button>
-            </div>
-          </form>
-        </div>
-      ) : (
-        user.is_admin && (
-          <div style={{ padding: '12px 16px', background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', marginBottom: 24, fontSize: 13, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span>🔒 국가 및 시스템 브랜딩(이름/로고) 변경은 보안 정책에 따라 <strong>최초 admin</strong> 계정에서만 수정할 수 있습니다.</span>
-          </div>
-        )
-      )}
-
-      {/* 2. 가입 승인 대기열 (계정 관리 권한 또는 슈퍼관리자) */}
-      <div className="card" style={{ border: pendingUsers.length > 0 ? '1px solid rgba(245, 158, 11, 0.4)' : undefined }}>
-        <div className="card-header">
-          <div className="card-title">
-            <Clock size={20} color="#fbbf24" />
-            <span>신규 회원가입 승인 대기열</span>
-            {pendingUsers.length > 0 && (
-              <span className="badge badge-pending" style={{ marginLeft: 6 }}>
-                {pendingUsers.length}명 대기 중
-              </span>
-            )}
-          </div>
-        </div>
-
-        <div className="table-container">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>신청 번호</th>
-                <th>아이디</th>
-                <th>인게임 닉네임</th>
-                <th>신청 일시</th>
-                <th>승인 심사</th>
-              </tr>
-            </thead>
-            <tbody>
-              {pendingUsers.length === 0 ? (
-                <tr>
-                  <td colSpan={5} style={{ textAlign: 'center', padding: 24, color: '#64748b' }}>
-                    가입 승인 대기 중인 사용자가 없습니다.
-                  </td>
-                </tr>
-              ) : (
-                pendingUsers.map((pu) => (
-                  <tr key={pu.id}>
-                    <td>#{pu.id}</td>
-                    <td><span style={{ fontWeight: 600 }}>{pu.username}</span></td>
-                    <td><span style={{ color: '#38bdf8', fontWeight: 600 }}>{pu.nickname || '-'}</span></td>
-                    <td style={{ fontSize: 13, color: '#94a3b8' }}>{pu.created_at}</td>
-                    <td>
-                      <div style={{ display: 'flex', gap: 6 }}>
-                        <button
-                          className="btn btn-success btn-sm"
-                          onClick={() => handleUpdateStatus(pu, 'approved')}
-                        >
-                          <UserCheck size={14} /> 가입 승인
-                        </button>
-                        <button
-                          className="btn btn-danger btn-sm"
-                          onClick={() => handleUpdateStatus(pu, 'rejected')}
-                        >
-                          <UserX size={14} /> 거절
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* 3. 디스코드 웹훅 통합 & 개별 상세 설정 센터 (지급 기록 포함 26종 전체) */}
-      {user.is_admin && <WebhookManager />}
-
-      {/* 💾 4. 데이터베이스 백업 & 복원 (JSON) - 슈퍼관리자 전용 */}
-      {user.is_admin && (
-        <div className="card" style={{ marginBottom: 28, border: '1px solid rgba(56, 189, 248, 0.3)', background: 'linear-gradient(180deg, rgba(15, 23, 42, 0.4) 0%, rgba(30, 41, 59, 0.2) 100%)' }}>
-          <div className="card-header">
-            <div className="card-title">
-              <Database size={20} color="#38bdf8" />
-              <span>데이터베이스 백업 & 복원 (JSON 추출 및 불러오기)</span>
-            </div>
-            <span className="badge badge-approved">🔒 슈퍼관리자 전용</span>
-          </div>
-
-          <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 20, lineHeight: 1.6 }}>
-            플랫폼의 모든 데이터(사용자 계정, 역할/권한, 재화, 물자 목록, 납품 신청 기록, 상점 및 주문, 공지사항, 디스코드 웹훅 설정, 단기 알바, 일정, 퀘스트, 시스템 브랜딩 등 14개 테이블 전체)를 <strong>JSON 파일 하나로 즉시 추출</strong>하거나 <strong>원클릭으로 복원</strong>할 수 있습니다. Render 클라우드 이전이나 주기적인 데이터 백업 시 안전하게 활용하세요.
-          </p>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-            {/* 백업 (내보내기) */}
-            <div style={{ padding: 16, background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 15, marginBottom: 8, color: '#38bdf8' }}>
-                  <Download size={18} />
-                  <span>데이터 JSON으로 추출 (다운로드)</span>
-                </div>
-                <p style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5, marginBottom: 16 }}>
-                  현재 시점의 전체 데이터베이스를 타임스탬프가 포함된 <code>.json</code> 파일로 다운로드합니다. 민감한 비밀번호 해시와 모든 테이블 관계가 정합성을 유지한 채 보관됩니다.
-                </p>
-              </div>
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={handleExportData}
-                disabled={backupLoading}
-                style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
-              >
-                {backupLoading ? <RefreshCw size={16} className="spin" /> : <Download size={16} />}
-                <span>{backupLoading ? '데이터 추출 및 패키징 중...' : '전체 데이터 JSON 내보내기 (백업)'}</span>
-              </button>
-            </div>
-
-            {/* 복원 (불러오기) */}
-            <div style={{ padding: 16, background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 15, marginBottom: 8, color: '#f59e0b' }}>
-                  <Upload size={18} />
-                  <span>데이터 JSON으로 불러오기 (복원)</span>
-                </div>
-                <p style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5, marginBottom: 16 }}>
-                  기존에 내보낸 백업 <code>.json</code> 파일을 선택하여 데이터베이스를 그대로 복원합니다. 복원 시 기존 데이터가 안전하게 교체되며 복원 실행 전 확인 대화창이 팝업됩니다.
-                </p>
-              </div>
-
-              <input
-                type="file"
-                ref={fileInputRef}
-                accept=".json,application/json"
-                style={{ display: 'none' }}
-                onChange={handleImportFileSelect}
-              />
-
-              <button
-                type="button"
-                className="btn btn-warning"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={restoreLoading}
-                style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
-              >
-                {restoreLoading ? <RefreshCw size={16} className="spin" /> : <Upload size={16} />}
-                <span>{restoreLoading ? '데이터베이스 복원 적용 중...' : 'JSON 백업 파일 선택 및 불러오기'}</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 📢 5. 공지사항 디스코드 웹훅 개별설정 및 메시지 양식 설정 (슈퍼관리자 & 공지 관리) */}
-      {(user.is_admin || canManageNotices) && (
-        <div className="card" style={{ marginBottom: 28 }}>
-          <div className="card-header">
-            <div className="card-title">
-              <Bell size={20} color="#38bdf8" />
-              <span>공지사항 디스코드 웹훅 개별설정 & 메시지 양식</span>
-            </div>
-            <span className="badge badge-approved">📢 공지 관리자 / 슈퍼관리자</span>
-          </div>
-
-          <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 20 }}>
-            각각의 공지사항(납품 안내문 등)마다 <strong>전용 디스코드 웹훅 채널</strong>과 <strong>메시지 양식(템플릿, 멘션 여부, 임베드 테두리 색상)</strong>을 개별적으로 커스터마이징할 수 있습니다.
-          </p>
-
-          {/* 공지 카테고리 탭 선택 */}
-          <div style={{ display: 'flex', gap: 8, marginBottom: 20, borderBottom: '1px solid var(--border-color)', paddingBottom: 12 }}>
-            <button
-              type="button"
-              className={`btn btn-sm ${selectedNoticeCategory === 'supply' ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => handleSelectNoticeCategory('supply')}
-            >
-              📦 납품 안내문 (공지)
-            </button>
-            {notices.filter(n => n.category !== 'supply').map(n => (
-              <button
-                key={n.category}
-                type="button"
-                className={`btn btn-sm ${selectedNoticeCategory === n.category ? 'btn-primary' : 'btn-secondary'}`}
-                onClick={() => handleSelectNoticeCategory(n.category)}
-              >
-                📢 {n.title || n.category}
-              </button>
-            ))}
-          </div>
-
-          <form onSubmit={handleSaveNoticeWebhook}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-              <div className="form-group">
-                <label className="form-label">공지사항 제목</label>
-                <input
-                  type="text"
-                  className="input"
-                  value={noticeWebhookForm.title}
-                  onChange={(e) => setNoticeWebhookForm({ ...noticeWebhookForm, title: e.target.value })}
-                  placeholder="공지사항 제목"
-                  required
-                />
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">공지사항 전용 디스코드 웹훅 URL</label>
-                <input
-                  type="url"
-                  className="input"
-                  placeholder="https://discord.com/api/webhooks/... (비워두면 전역 기본 웹훅 사용)"
-                  value={noticeWebhookForm.webhook_url}
-                  onChange={(e) => setNoticeWebhookForm({ ...noticeWebhookForm, webhook_url: e.target.value })}
-                />
-              </div>
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">공지사항 본문 내용</label>
-              <textarea
-                className="textarea"
-                rows="4"
-                value={noticeWebhookForm.content}
-                onChange={(e) => setNoticeWebhookForm({ ...noticeWebhookForm, content: e.target.value })}
-                placeholder="공지사항 본문 내용을 입력하세요."
-                required
-              />
-            </div>
-
-            <div style={{
-              padding: 16,
-              background: 'var(--bg-tertiary)',
-              borderRadius: 'var(--radius-md)',
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              background: '#ffffff',
+              padding: '6px 12px',
+              borderRadius: 'var(--radius-pill)',
               border: '1px solid var(--border-color)',
-              marginBottom: 16
-            }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                <div style={{ fontWeight: 700, fontSize: 13, color: '#38bdf8', display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <Palette size={15} />
-                  <span>디스코드 메시지 양식 & 발송 옵션</span>
-                </div>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
-                  <input
-                    type="checkbox"
-                    checked={noticeWebhookForm.webhook_enabled === 1}
-                    onChange={(e) => setNoticeWebhookForm({ ...noticeWebhookForm, webhook_enabled: e.target.checked ? 1 : 0 })}
-                  />
-                  <span style={{ fontWeight: 600, color: noticeWebhookForm.webhook_enabled ? 'var(--primary)' : 'var(--text-secondary)' }}>
-                    공지 저장 시 디스코드 자동 발송
-                  </span>
-                </label>
-              </div>
+              boxShadow: 'var(--shadow-sm)'
+            }}
+          >
+            <Layers size={15} color="var(--primary)" />
+            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+              관리 탭 선택:
+            </span>
+            <select
+              className="select"
+              value={activeSubTab}
+              onChange={(e) => setActiveSubTab(e.target.value)}
+              style={{
+                border: 'none',
+                background: 'var(--bg-tertiary)',
+                padding: '5px 12px',
+                borderRadius: 'var(--radius-pill)',
+                fontSize: 13,
+                fontWeight: 700,
+                color: 'var(--text-main)',
+                width: 'auto',
+                minWidth: 190,
+                cursor: 'pointer'
+              }}
+            >
+              {availableTabs.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.label} ({t.badge})
+                </option>
+              ))}
+            </select>
+          </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 14 }}>
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label" style={{ fontSize: 12 }}>멘션 호출</label>
-                  <select
-                    className="input"
-                    value={noticeWebhookForm.mention_type}
-                    onChange={(e) => setNoticeWebhookForm({ ...noticeWebhookForm, mention_type: e.target.value })}
-                  >
-                    <option value="none">멘션 없음 (알림만 전송)</option>
-                    <option value="everyone">@everyone (서버 전체 멘션)</option>
-                    <option value="here">@here (현재 온라인 사용자 멘션)</option>
-                  </select>
-                </div>
+          {user.is_admin && (
+            <button className="btn btn-primary" onClick={() => setShowSuperAdminModal(true)}>
+              <Crown size={16} /> 새 슈퍼 관리자 생성
+            </button>
+          )}
+        </div>
+      </div>
 
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label" style={{ fontSize: 12 }}>디스코드 임베드 테두리 색상</label>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <input
-                      type="color"
-                      value={noticeWebhookForm.embed_color || '#3b82f6'}
-                      onChange={(e) => setNoticeWebhookForm({ ...noticeWebhookForm, embed_color: e.target.value })}
-                      style={{ width: 42, height: 38, padding: 2, borderRadius: 6, cursor: 'pointer', border: '1px solid var(--border-color)', background: 'transparent' }}
-                    />
-                    <input
-                      type="text"
-                      className="input"
-                      value={noticeWebhookForm.embed_color || '#3b82f6'}
-                      onChange={(e) => setNoticeWebhookForm({ ...noticeWebhookForm, embed_color: e.target.value })}
-                      style={{ flex: 1 }}
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div className="form-group" style={{ marginBottom: 6 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                  <label className="form-label" style={{ fontSize: 12, marginBottom: 0 }}>
-                    메시지 본문 양식 (커스텀 템플릿)
-                  </label>
-                  <div style={{ display: 'flex', gap: 4 }}>
-                    {['{title}', '{content}', '{author}', '{date}'].map((tag) => (
-                      <button
-                        key={tag}
-                        type="button"
-                        className="btn btn-secondary btn-sm"
-                        style={{ padding: '2px 6px', fontSize: 11 }}
-                        onClick={() => setNoticeWebhookForm({ ...noticeWebhookForm, message_template: (noticeWebhookForm.message_template || '') + tag })}
-                      >
-                        +{tag}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <textarea
-                  className="textarea"
-                  rows="3"
-                  placeholder="비워두면 기본 공지 내용이 디스코드 본문으로 전송됩니다. 예: 📢 **[공지] {title}**&#10;&#10;{content}&#10;&#10;— 작성자: {author}"
-                  value={noticeWebhookForm.message_template}
-                  onChange={(e) => setNoticeWebhookForm({ ...noticeWebhookForm, message_template: e.target.value })}
-                />
-                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
-                  템플릿 태그: <code>{'{title}'}</code>(제목), <code>{'{content}'}</code>(내용), <code>{'{author}'}</code>(작성자), <code>{'{date}'}</code>(발송일시)
-                </div>
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      {/* 카테고리 탭 네비게이션 바 (우측 정렬/반응형 탭 스위치) */}
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: 10,
+          marginBottom: 24,
+          padding: '8px 10px',
+          background: '#ffffff',
+          borderRadius: 'var(--radius-lg)',
+          border: '1px solid var(--border-color)',
+          boxShadow: 'var(--shadow-sm)',
+          flexWrap: 'wrap'
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', flex: 1 }}>
+          {availableTabs.map((tab) => {
+            const Icon = tab.icon;
+            const isActive = activeSubTab === tab.id;
+            return (
               <button
+                key={tab.id}
                 type="button"
-                className="btn btn-secondary"
-                onClick={handleTestNoticeWebhookFromAdmin}
-                disabled={testingNoticeWebhook}
-                style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+                onClick={() => setActiveSubTab(tab.id)}
+                className={`btn btn-sm ${isActive ? 'btn-primary' : 'btn-secondary'}`}
+                style={{
+                  padding: '8px 14px',
+                  fontSize: 13,
+                  fontWeight: isActive ? 700 : 600,
+                  border: isActive ? 'none' : '1px solid transparent',
+                  background: isActive ? 'var(--primary)' : 'transparent',
+                  color: isActive ? '#ffffff' : 'var(--text-secondary)'
+                }}
               >
-                <Send size={14} />
-                <span>{testingNoticeWebhook ? '테스트 발송 중...' : '디스코드 테스트 발송'}</span>
+                <Icon size={15} />
+                <span>{tab.label}</span>
+                {tab.badge && (
+                  <span
+                    style={{
+                      fontSize: 11,
+                      padding: '1px 7px',
+                      borderRadius: 999,
+                      fontWeight: 700,
+                      background: isActive
+                        ? 'rgba(255, 255, 255, 0.22)'
+                        : tab.badgeAlert
+                        ? '#fef3c7'
+                        : 'var(--bg-tertiary)',
+                      color: isActive
+                        ? '#ffffff'
+                        : tab.badgeAlert
+                        ? '#b45309'
+                        : 'var(--text-muted)'
+                    }}
+                  >
+                    {tab.badge}
+                  </span>
+                )}
               </button>
+            );
+          })}
+        </div>
 
-              <div style={{ display: 'flex', gap: 10 }}>
-                <button
-                  type="button"
-                  className="btn btn-warning"
-                  onClick={(e) => handleSaveNoticeWebhook(e, true)}
-                  style={{ display: 'flex', alignItems: 'center', gap: 6 }}
-                >
-                  <Send size={14} /> 설정 저장 & 디스코드 즉시 알림
-                </button>
-                <button type="submit" className="btn btn-primary">
-                  공지 및 웹훅 설정 저장
-                </button>
+        <button
+          type="button"
+          className="btn btn-secondary btn-sm"
+          onClick={loadData}
+          disabled={loading}
+          title="데이터 새로고침"
+        >
+          <RefreshCw size={13} className={loading ? 'spin' : ''} />
+          <span>새로고침</span>
+        </button>
+      </div>
+
+      {/* ===================================================================== */}
+      {/* 탭 1: 계정 · 가입 관리 (신규 가입 승인 대기열 + 사용자 목록 및 역할 부여) */}
+      {/* ===================================================================== */}
+      {activeSubTab === 'users' && (user.is_admin || canManageAccounts || canManageRoles) && (
+        <div>
+          {/* 1-1. 신규 회원가입 승인 대기열 */}
+          <div className="card" style={{ border: pendingUsers.length > 0 ? '1px solid rgba(245, 158, 11, 0.5)' : undefined }}>
+            <div className="card-header">
+              <div className="card-title">
+                <Clock size={20} color="#fbbf24" />
+                <span>신규 회원가입 승인 대기열</span>
+                {pendingUsers.length > 0 && (
+                  <span className="badge badge-pending" style={{ marginLeft: 6 }}>
+                    {pendingUsers.length}명 대기 중
+                  </span>
+                )}
               </div>
             </div>
-          </form>
+
+            <div className="table-container">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>신청 번호</th>
+                    <th>아이디</th>
+                    <th>인게임 닉네임</th>
+                    <th>신청 일시</th>
+                    <th>승인 심사</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pendingUsers.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} style={{ textAlign: 'center', padding: 24, color: '#64748b' }}>
+                        가입 승인 대기 중인 사용자가 없습니다.
+                      </td>
+                    </tr>
+                  ) : (
+                    pendingUsers.map((pu) => (
+                      <tr key={pu.id}>
+                        <td>#{pu.id}</td>
+                        <td><span style={{ fontWeight: 600 }}>{pu.username}</span></td>
+                        <td><span style={{ color: '#38bdf8', fontWeight: 600 }}>{pu.nickname || '-'}</span></td>
+                        <td style={{ fontSize: 13, color: '#94a3b8' }}>{pu.created_at}</td>
+                        <td>
+                          <div style={{ display: 'flex', gap: 6 }}>
+                            <button
+                              className="btn btn-success btn-sm"
+                              onClick={() => handleUpdateStatus(pu, 'approved')}
+                            >
+                              <UserCheck size={14} /> 가입 승인
+                            </button>
+                            <button
+                              className="btn btn-danger btn-sm"
+                              onClick={() => handleUpdateStatus(pu, 'rejected')}
+                            >
+                              <UserX size={14} /> 거절
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* 1-2. 승인된 사용자 목록 및 개인별 디스코드 역할(랭크) 선택 부여 */}
+          <div className="card">
+            <div className="card-header" style={{ flexWrap: 'wrap', gap: 12 }}>
+              <div>
+                <div className="card-title">
+                  <Users size={20} color="#60a5fa" />
+                  <span>사용자 목록 및 개인별 역할(랭크) 부여 ({filteredApprovedUsers.length}명)</span>
+                </div>
+                <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
+                  오른쪽 역할 선택창에서 부여할 역할을 선택해 추가하거나, 부여된 역할 태그를 클릭해 해제할 수 있습니다.
+                </p>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <div style={{ position: 'relative' }}>
+                  <Search size={14} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                  <input
+                    type="text"
+                    className="input"
+                    placeholder="닉네임, 아이디, 역할 검색..."
+                    value={userSearch}
+                    onChange={(e) => setUserSearch(e.target.value)}
+                    style={{ paddingLeft: 32, height: 34, width: 220, fontSize: 13 }}
+                  />
+                </div>
+
+                <div
+                  style={{
+                    display: 'flex',
+                    background: 'var(--bg-tertiary)',
+                    padding: 3,
+                    borderRadius: 'var(--radius-pill)',
+                    border: '1px solid var(--border-color)'
+                  }}
+                >
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${roleViewMode === 'select' ? 'btn-primary' : ''}`}
+                    style={{
+                      padding: '4px 10px',
+                      fontSize: 11,
+                      background: roleViewMode === 'select' ? undefined : 'transparent',
+                      color: roleViewMode === 'select' ? undefined : 'var(--text-secondary)'
+                    }}
+                    onClick={() => setRoleViewMode('select')}
+                  >
+                    드롭다운 선택형
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${roleViewMode === 'buttons' ? 'btn-primary' : ''}`}
+                    style={{
+                      padding: '4px 10px',
+                      fontSize: 11,
+                      background: roleViewMode === 'buttons' ? undefined : 'transparent',
+                      color: roleViewMode === 'buttons' ? undefined : 'var(--text-secondary)'
+                    }}
+                    onClick={() => setRoleViewMode('buttons')}
+                  >
+                    전체 탭 나열형
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="table-container">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>사용자 & 대표 역할</th>
+                    <th>상태</th>
+                    {user.is_admin && <th>슈퍼관리자</th>}
+                    <th>보유 재화</th>
+                    <th>개인별 부여 역할 (선택 추가 / 클릭 해제)</th>
+                    <th>작업</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredApprovedUsers.length === 0 ? (
+                    <tr>
+                      <td colSpan={user.is_admin ? 6 : 5} style={{ textAlign: 'center', padding: 24, color: '#64748b' }}>
+                        검색 조건에 일치하는 사용자가 없습니다.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredApprovedUsers.map((u) => {
+                      const topRole = u.roles?.[0];
+                      const assignedRoles = u.roles || [];
+                      const unassignedRoles = allRoles.filter(
+                        roleObj => !assignedRoles.some(r => r.id === roleObj.id)
+                      );
+
+                      return (
+                        <tr key={u.id}>
+                          <td>
+                            <div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                                <span style={{ fontWeight: 700, color: topRole?.color && topRole.color !== '#99aab5' ? topRole.color : undefined }}>
+                                  {u.nickname || u.username}
+                                </span>
+                                {topRole && (
+                                  <span
+                                    className="badge"
+                                    style={{
+                                      background: `${topRole.color}20`,
+                                      color: topRole.color,
+                                      border: `1px solid ${topRole.color}55`,
+                                      fontSize: 10,
+                                      fontWeight: 700
+                                    }}
+                                  >
+                                    ● {topRole.name}
+                                  </span>
+                                )}
+                                {u.custom_title && (
+                                  <span className="badge" style={{ background: '#eff6ff', color: '#1d4ed8', fontSize: 10 }}>
+                                    {u.custom_title}
+                                  </span>
+                                )}
+                              </div>
+                              <div style={{ fontSize: 11, color: '#64748b' }}>@{u.username}</div>
+                              {u.must_change_password && (
+                                <span style={{ fontSize: 11, color: '#f59e0b' }}>⚠️ 비번 변경 필요</span>
+                              )}
+                            </div>
+                          </td>
+                          <td>
+                            {u.status === 'approved' && <span className="badge badge-approved">승인됨</span>}
+                            {u.status === 'rejected' && <span className="badge badge-rejected">거절됨</span>}
+                          </td>
+                          {user.is_admin && (
+                            <td>
+                              <button
+                                onClick={() => handleToggleAdmin(u)}
+                                className={`btn btn-sm ${u.is_admin ? 'btn-primary' : 'btn-secondary'}`}
+                                style={{ fontSize: 11 }}
+                              >
+                                {u.is_admin ? '👑 슈퍼관리자' : '일반'}
+                              </button>
+                            </td>
+                          )}
+                          <td>
+                            <div style={{ fontSize: 12 }}>
+                              <span style={{ color: '#fbbf24', fontWeight: 600 }}>{(u.points ?? 0).toLocaleString()} P</span>
+                              <br />
+                              <span style={{ color: '#34d399', fontWeight: 600 }}>{(u.credits ?? 0).toLocaleString()} C</span>
+                            </div>
+                          </td>
+                          <td>
+                            {allRoles.length === 0 ? (
+                              <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                                [역할 · 권한 설정] 탭에서 역할을 먼저 만들어 주세요.
+                              </span>
+                            ) : roleViewMode === 'select' ? (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxWidth: 520 }}>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
+                                  {assignedRoles.length === 0 ? (
+                                    <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>부여된 역할 없음</span>
+                                  ) : (
+                                    assignedRoles.map((userRole) => {
+                                      const fullRole = allRoles.find(r => r.id === userRole.id) || userRole;
+                                      const canRemove = (user.is_admin || canManageRoles) && (fullRole.manageable ?? true) && (!u.is_admin || user.is_admin);
+                                      const roleColor = fullRole.color || '#64748b';
+                                      return (
+                                        <button
+                                          key={userRole.id}
+                                          type="button"
+                                          disabled={!canRemove}
+                                          onClick={() => handleToggleRole(u, fullRole)}
+                                          title={
+                                            canRemove
+                                              ? `클릭하여 [${fullRole.name}] 역할 해제`
+                                              : '해제 권한 없음'
+                                          }
+                                          style={{
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: 5,
+                                            padding: '4px 10px',
+                                            borderRadius: 999,
+                                            fontSize: 11,
+                                            fontWeight: 700,
+                                            cursor: canRemove ? 'pointer' : 'default',
+                                            border: `1.5px solid ${roleColor}`,
+                                            background: `${roleColor}18`,
+                                            color: roleColor
+                                          }}
+                                        >
+                                          <span style={{ width: 7, height: 7, borderRadius: '50%', background: roleColor }} />
+                                          <span>{fullRole.name}</span>
+                                          {canRemove && <X size={11} />}
+                                        </button>
+                                      );
+                                    })
+                                  )}
+
+                                  {/* 드롭다운으로 깔끔하게 역할 선택 추가 */}
+                                  {(user.is_admin || canManageRoles) && (!u.is_admin || user.is_admin) && unassignedRoles.length > 0 && (
+                                    <select
+                                      className="select"
+                                      value=""
+                                      onChange={(e) => {
+                                        const roleId = Number(e.target.value);
+                                        const targetRole = allRoles.find(r => r.id === roleId);
+                                        if (targetRole) handleToggleRole(u, targetRole);
+                                      }}
+                                      style={{
+                                        width: 'auto',
+                                        minWidth: 145,
+                                        height: 28,
+                                        padding: '2px 10px',
+                                        fontSize: 11,
+                                        fontWeight: 600,
+                                        borderRadius: 999,
+                                        background: 'var(--bg-tertiary)',
+                                        cursor: 'pointer'
+                                      }}
+                                    >
+                                      <option value="">+ 역할 선택 부여...</option>
+                                      {unassignedRoles.map((roleObj) => {
+                                        const manageable = user.is_admin || roleObj.manageable;
+                                        return (
+                                          <option key={roleObj.id} value={roleObj.id} disabled={!manageable}>
+                                            {roleObj.name}
+                                            {roleObj.permissions?.length ? ` (권한 ${roleObj.permissions.length}개)` : ''}
+                                            {!manageable ? ' [권한 부족]' : ''}
+                                          </option>
+                                        );
+                                      })}
+                                    </select>
+                                  )}
+                                </div>
+
+                                {u.permissions?.length > 0 && (
+                                  <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                                    활성 권한: {u.permissions.join(' · ')}
+                                  </div>
+                                )}
+                              </div>
+                            ) : (
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxWidth: 580 }}>
+                                {allRoles.map((roleObj) => {
+                                  const hasRole = u.roles?.some(r => r.id === roleObj.id);
+                                  const canToggle = (user.is_admin || canManageRoles) && roleObj.manageable && (!u.is_admin || user.is_admin);
+                                  const roleColor = roleObj.color || '#64748b';
+                                  return (
+                                    <button
+                                      key={roleObj.id}
+                                      type="button"
+                                      disabled={!canToggle}
+                                      onClick={() => handleToggleRole(u, roleObj)}
+                                      title={
+                                        roleObj.permissions?.length
+                                          ? `포함 권한: ${roleObj.permissions.join(', ')}`
+                                          : '권한 없음 (순수 랭크/칭호 역할)'
+                                      }
+                                      style={{
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: 5,
+                                        padding: '4px 10px',
+                                        borderRadius: 999,
+                                        fontSize: 11,
+                                        fontWeight: 700,
+                                        cursor: canToggle ? 'pointer' : 'default',
+                                        border: hasRole ? `1.5px solid ${roleColor}` : '1px solid var(--border-color)',
+                                        background: hasRole ? `${roleColor}22` : 'var(--bg-secondary)',
+                                        color: hasRole ? roleColor : 'var(--text-muted)',
+                                        opacity: !canToggle && !hasRole ? 0.55 : 1,
+                                        transition: 'all 0.15s ease'
+                                      }}
+                                    >
+                                      <span style={{ width: 8, height: 8, borderRadius: '50%', background: roleColor }} />
+                                      <span>{hasRole ? `✓ ${roleObj.name}` : `+ ${roleObj.name}`}</span>
+                                    </button>
+                                  );
+                                })}
+                                {u.permissions?.length > 0 && (
+                                  <div style={{ width: '100%', fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+                                    활성 권한: {u.permissions.join(' · ')}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </td>
+                          <td>
+                            <div style={{ display: 'flex', gap: 6 }}>
+                              {(user.is_admin || canManageAccounts) && (
+                                <button
+                                  className="btn btn-secondary btn-sm"
+                                  onClick={() => {
+                                    setSelectedUser(u);
+                                    setAssetForm({
+                                      points: u.points,
+                                      credits: u.credits,
+                                      nickname: u.nickname || u.username,
+                                      custom_title: u.custom_title || '',
+                                      reason: '',
+                                      sync_active_season: true
+                                    });
+                                    setShowAssetModal(true);
+                                  }}
+                                  title="프로필 및 포인트/크레딧 정밀 수정"
+                                >
+                                  <DollarSign size={13} /> 수치·칭호 수정
+                                </button>
+                              )}
+                              <button
+                                className="btn btn-secondary btn-sm"
+                                onClick={() => handleResetPassword(u)}
+                                title="비밀번호 초기화"
+                              >
+                                <Key size={13} />
+                              </button>
+                              {u.username !== 'admin' && (
+                                <button
+                                  className="btn btn-danger btn-sm"
+                                  onClick={() => handleDeleteUser(u)}
+                                  title="계정 삭제"
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       )}
 
-      {/* 🎛️ 전역 수치 및 보상 배율 정밀 제어 센터 (슈퍼관리자 & 랭킹 관리자) */}
-      {(user.is_admin || canManageRanking) && (
+      {/* ===================================================================== */}
+      {/* 탭 2: 역할 · 권한 설정 (디스코드 스타일 역할 생성·권한·위계 관리) */}
+      {/* ===================================================================== */}
+      {activeSubTab === 'roles' && (user.is_admin || canManageRoles || canManageAccounts) && (
+        <RoleManager
+          user={user}
+          users={approvedUsers}
+          refreshKey={roleRefreshKey}
+          onChanged={() => {
+            loadData();
+            if (refreshUser) refreshUser();
+          }}
+        />
+      )}
+
+      {/* ===================================================================== */}
+      {/* 탭 3: 전역 수치 · 배율 제어 센터 */}
+      {/* ===================================================================== */}
+      {activeSubTab === 'economy' && (user.is_admin || canManageRanking) && (
         <div className="card" style={{ marginBottom: 28, border: '1px solid #bfdbfe', background: '#f8fafc' }}>
           <div className="card-header">
             <div className="card-title">
@@ -1025,67 +1318,67 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
           <form onSubmit={handleSaveGlobalNumericConfig}>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 12 }}>
               <div className="form-group" style={{ marginBottom: 0 }}>
-                <label className="form-label" style={{ fontSize: 12 }}>전역 포인트 획득 배율 (x배)</label>
+                <label className="form-label" style={{ fontSize: 12 }}>전역 포인트 획득 배율 (x배 · 자동저장)</label>
                 <input
                   type="number"
                   step="0.1"
                   className="input"
                   value={globalNumericConfig.point_multiplier}
-                  onChange={(e) => setGlobalNumericConfig({ ...globalNumericConfig, point_multiplier: e.target.value })}
+                  onChange={(e) => updateNumericConfigAutoSave({ point_multiplier: e.target.value })}
                 />
               </div>
               <div className="form-group" style={{ marginBottom: 0 }}>
-                <label className="form-label" style={{ fontSize: 12 }}>전역 크레딧 획득 배율 (x배)</label>
+                <label className="form-label" style={{ fontSize: 12 }}>전역 크레딧 획득 배율 (x배 · 자동저장)</label>
                 <input
                   type="number"
                   step="0.1"
                   className="input"
                   value={globalNumericConfig.credit_multiplier}
-                  onChange={(e) => setGlobalNumericConfig({ ...globalNumericConfig, credit_multiplier: e.target.value })}
+                  onChange={(e) => updateNumericConfigAutoSave({ credit_multiplier: e.target.value })}
                 />
               </div>
               <div className="form-group" style={{ marginBottom: 0 }}>
-                <label className="form-label" style={{ fontSize: 12 }}>1 C당 인게임 원화 환전비</label>
+                <label className="form-label" style={{ fontSize: 12 }}>1 C당 인게임 원화 환전비 (자동저장)</label>
                 <input
                   type="number"
                   step="any"
                   className="input"
                   disabled={!user.is_admin}
                   value={globalNumericConfig.exchange_rate}
-                  onChange={(e) => setGlobalNumericConfig({ ...globalNumericConfig, exchange_rate: e.target.value })}
+                  onChange={(e) => updateNumericConfigAutoSave({ exchange_rate: e.target.value })}
                 />
               </div>
               <div className="form-group" style={{ marginBottom: 0 }}>
-                <label className="form-label" style={{ fontSize: 12 }}>최소 환전 가능 크레딧 (C)</label>
+                <label className="form-label" style={{ fontSize: 12 }}>최소 환전 가능 크레딧 (C · 자동저장)</label>
                 <input
                   type="number"
                   className="input"
                   disabled={!user.is_admin}
                   value={globalNumericConfig.min_exchange_amount}
-                  onChange={(e) => setGlobalNumericConfig({ ...globalNumericConfig, min_exchange_amount: e.target.value })}
+                  onChange={(e) => updateNumericConfigAutoSave({ min_exchange_amount: e.target.value })}
                 />
               </div>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 3fr', gap: 12, alignItems: 'end' }}>
               <div className="form-group" style={{ marginBottom: 0 }}>
-                <label className="form-label" style={{ fontSize: 12 }}>환전 수수료율 (%)</label>
+                <label className="form-label" style={{ fontSize: 12 }}>환전 수수료율 (% · 자동저장)</label>
                 <input
                   type="number"
                   step="0.1"
                   className="input"
                   disabled={!user.is_admin}
                   value={globalNumericConfig.exchange_fee_percent}
-                  onChange={(e) => setGlobalNumericConfig({ ...globalNumericConfig, exchange_fee_percent: e.target.value })}
+                  onChange={(e) => updateNumericConfigAutoSave({ exchange_fee_percent: e.target.value })}
                 />
               </div>
               <div className="form-group" style={{ marginBottom: 0 }}>
-                <label className="form-label" style={{ fontSize: 12 }}>랭킹 보드 상단 안내 문구</label>
+                <label className="form-label" style={{ fontSize: 12 }}>랭킹 보드 상단 안내 문구 (자동저장)</label>
                 <input
                   type="text"
                   className="input"
                   value={globalNumericConfig.ranking_board_notice || ''}
-                  onChange={(e) => setGlobalNumericConfig({ ...globalNumericConfig, ranking_board_notice: e.target.value })}
+                  onChange={(e) => updateNumericConfigAutoSave({ ranking_board_notice: e.target.value })}
                 />
               </div>
             </div>
@@ -1099,8 +1392,10 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
         </div>
       )}
 
-      {/* 📊 SQLite 연방 포인트/크레딧 입출금 상세 원장 & CSV/XLSX 다운로드 ('데이터 관리' 권한 전용) */}
-      {canManageData && (
+      {/* ===================================================================== */}
+      {/* 탭 4: 연방 포인트/크레딧 입출금 상세 원장 */}
+      {/* ===================================================================== */}
+      {activeSubTab === 'ledger' && canManageData && (
         <div className="card" style={{ marginBottom: 28, border: '1px solid #a7f3d0' }}>
           <div className="card-header" style={{ flexWrap: 'wrap', gap: 10 }}>
             <div className="card-title">
@@ -1178,7 +1473,7 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
             </button>
           </div>
 
-          <div className="table-container" style={{ maxHeight: 360, overflowY: 'auto' }}>
+          <div className="table-container" style={{ maxHeight: 480, overflowY: 'auto' }}>
             <table className="table">
               <thead>
                 <tr>
@@ -1245,200 +1540,352 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
         </div>
       )}
 
-      {/* 🛡️ 디스코드 스타일 역할 생성·권한·위계 순서 관리 스튜디오 */}
-      {(user.is_admin || canManageRoles || canManageAccounts) && (
-        <RoleManager
-          user={user}
-          users={approvedUsers}
-          refreshKey={roleRefreshKey}
-          onChanged={() => {
-            loadData();
-            if (refreshUser) refreshUser();
-          }}
-        />
+      {/* ===================================================================== */}
+      {/* 탭 5: 공지사항 디스코드 웹훅 개별설정 & 메시지 양식 */}
+      {/* ===================================================================== */}
+      {activeSubTab === 'notices' && (user.is_admin || canManageNotices) && (
+        <div className="card" style={{ marginBottom: 28 }}>
+          <div className="card-header">
+            <div className="card-title">
+              <Bell size={20} color="#38bdf8" />
+              <span>공지사항 디스코드 웹훅 개별설정 & 메시지 양식</span>
+            </div>
+            <span className="badge badge-approved">📢 공지 관리자 / 슈퍼관리자</span>
+          </div>
+
+          <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 20 }}>
+            각각의 공지사항(납품 안내문 등)마다 <strong>전용 디스코드 웹훅 채널</strong>과 <strong>메시지 양식(템플릿, 멘션 여부, 임베드 테두리 색상)</strong>을 개별적으로 커스터마이징할 수 있습니다.
+          </p>
+
+          {/* 공지 카테고리 탭 선택 */}
+          <div style={{ display: 'flex', gap: 8, marginBottom: 20, borderBottom: '1px solid var(--border-color)', paddingBottom: 12 }}>
+            <button
+              type="button"
+              className={`btn btn-sm ${selectedNoticeCategory === 'supply' ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => handleSelectNoticeCategory('supply')}
+            >
+              📦 납품 안내문 (공지)
+            </button>
+            {notices.filter(n => n.category !== 'supply').map(n => (
+              <button
+                key={n.category}
+                type="button"
+                className={`btn btn-sm ${selectedNoticeCategory === n.category ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => handleSelectNoticeCategory(n.category)}
+              >
+                📢 {n.title || n.category}
+              </button>
+            ))}
+          </div>
+
+          <form onSubmit={handleSaveNoticeWebhook}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+              <div className="form-group">
+                <label className="form-label">공지사항 제목 (수정 시 SQLite 자동저장)</label>
+                <input
+                  type="text"
+                  className="input"
+                  value={noticeWebhookForm.title}
+                  onChange={(e) => updateNoticeFormAutoSave({ title: e.target.value })}
+                  placeholder="공지사항 제목"
+                  required
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">공지사항 전용 디스코드 웹훅 URL (수정 시 자동저장)</label>
+                <input
+                  type="url"
+                  className="input"
+                  placeholder="https://discord.com/api/webhooks/... (비워두면 전역 기본 웹훅 사용)"
+                  value={noticeWebhookForm.webhook_url}
+                  onChange={(e) => updateNoticeFormAutoSave({ webhook_url: e.target.value })}
+                />
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">공지사항 본문 내용 (수정 시 SQLite 자동저장)</label>
+              <textarea
+                className="textarea"
+                rows="4"
+                value={noticeWebhookForm.content}
+                onChange={(e) => updateNoticeFormAutoSave({ content: e.target.value })}
+                placeholder="공지사항 본문 내용을 입력하세요."
+                required
+              />
+            </div>
+
+            <div style={{
+              padding: 16,
+              background: 'var(--bg-tertiary)',
+              borderRadius: 'var(--radius-md)',
+              border: '1px solid var(--border-color)',
+              marginBottom: 16
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                <div style={{ fontWeight: 700, fontSize: 13, color: '#38bdf8', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <Palette size={15} />
+                  <span>디스코드 메시지 양식 & 발송 옵션</span>
+                </div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={noticeWebhookForm.webhook_enabled === 1}
+                    onChange={(e) => updateNoticeFormAutoSave({ webhook_enabled: e.target.checked ? 1 : 0 })}
+                  />
+                  <span style={{ fontWeight: 600, color: noticeWebhookForm.webhook_enabled ? 'var(--primary)' : 'var(--text-secondary)' }}>
+                    공지 저장 시 디스코드 자동 발송
+                  </span>
+                </label>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 14 }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label" style={{ fontSize: 12 }}>멘션 호출</label>
+                  <select
+                    className="input"
+                    value={noticeWebhookForm.mention_type}
+                    onChange={(e) => updateNoticeFormAutoSave({ mention_type: e.target.value })}
+                  >
+                    <option value="none">멘션 없음 (알림만 전송)</option>
+                    <option value="everyone">@everyone (서버 전체 멘션)</option>
+                    <option value="here">@here (현재 온라인 사용자 멘션)</option>
+                  </select>
+                </div>
+
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label" style={{ fontSize: 12 }}>디스코드 임베드 테두리 색상</label>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <input
+                      type="color"
+                      value={noticeWebhookForm.embed_color || '#3b82f6'}
+                      onChange={(e) => updateNoticeFormAutoSave({ embed_color: e.target.value })}
+                      style={{ width: 42, height: 38, padding: 2, borderRadius: 6, cursor: 'pointer', border: '1px solid var(--border-color)', background: 'transparent' }}
+                    />
+                    <input
+                      type="text"
+                      className="input"
+                      value={noticeWebhookForm.embed_color || '#3b82f6'}
+                      onChange={(e) => updateNoticeFormAutoSave({ embed_color: e.target.value })}
+                      style={{ flex: 1 }}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="form-group" style={{ marginBottom: 6 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                  <label className="form-label" style={{ fontSize: 12, marginBottom: 0 }}>
+                    메시지 본문 양식 (커스텀 템플릿 · 자동저장)
+                  </label>
+                  <div style={{ display: 'flex', gap: 4 }}>
+                    {['{title}', '{content}', '{author}', '{date}'].map((tag) => (
+                      <button
+                        key={tag}
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        style={{ padding: '2px 6px', fontSize: 11 }}
+                        onClick={() => updateNoticeFormAutoSave({ message_template: (noticeWebhookForm.message_template || '') + tag })}
+                      >
+                        +{tag}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <textarea
+                  className="textarea"
+                  rows="3"
+                  placeholder="비워두면 기본 공지 내용이 디스코드 본문으로 전송됩니다. 예: 📢 **[공지] {title}**&#10;&#10;{content}&#10;&#10;— 작성자: {author}"
+                  value={noticeWebhookForm.message_template}
+                  onChange={(e) => updateNoticeFormAutoSave({ message_template: e.target.value })}
+                />
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+                  템플릿 태그: <code>{'{title}'}</code>(제목), <code>{'{content}'}</code>(내용), <code>{'{author}'}</code>(작성자), <code>{'{date}'}</code>(발송일시)
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={handleTestNoticeWebhookFromAdmin}
+                disabled={testingNoticeWebhook}
+                style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+              >
+                <Send size={14} />
+                <span>{testingNoticeWebhook ? '테스트 발송 중...' : '디스코드 테스트 발송'}</span>
+              </button>
+
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button
+                  type="button"
+                  className="btn btn-warning"
+                  onClick={(e) => handleSaveNoticeWebhook(e, true)}
+                  style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+                >
+                  <Send size={14} /> 설정 저장 & 디스코드 즉시 알림
+                </button>
+                <button type="submit" className="btn btn-primary">
+                  공지 및 웹훅 설정 저장
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
       )}
 
-      {/* 4. 승인된 사용자 및 개인별 디스코드 역할(랭크) 부여 */}
-      <div className="card">
-        <div className="card-header">
-          <div className="card-title">
-            <Users size={20} color="#60a5fa" />
-            <span>사용자 목록 및 개인별 역할(랭크) 부여</span>
-          </div>
-          <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-            각 사용자에게 디스코드처럼 역할을 클릭해 부여하거나 해제할 수 있습니다 (위쪽 서열 역할부터 표시)
-          </span>
-        </div>
+      {/* ===================================================================== */}
+      {/* 탭 6: 디스코드 웹훅 통합 & 개별 상세 설정 센터 (26종 이벤트) */}
+      {/* ===================================================================== */}
+      {activeSubTab === 'webhooks' && user.is_admin && <WebhookManager />}
 
-        <div className="table-container">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>사용자 & 대표 역할</th>
-                <th>상태</th>
-                {user.is_admin && <th>슈퍼관리자</th>}
-                <th>보유 재화</th>
-                <th>개인별 부여 역할 (클릭하여 토글)</th>
-                <th>작업</th>
-              </tr>
-            </thead>
-            <tbody>
-              {approvedUsers.map((u) => {
-                const topRole = u.roles?.[0];
-                return (
-                <tr key={u.id}>
-                  <td>
-                    <div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                        <span style={{ fontWeight: 700, color: topRole?.color && topRole.color !== '#99aab5' ? topRole.color : undefined }}>
-                          {u.nickname || u.username}
-                        </span>
-                        {topRole && (
-                          <span
-                            className="badge"
-                            style={{
-                              background: `${topRole.color}20`,
-                              color: topRole.color,
-                              border: `1px solid ${topRole.color}55`,
-                              fontSize: 10,
-                              fontWeight: 700
-                            }}
-                          >
-                            ● {topRole.name}
-                          </span>
-                        )}
-                        {u.custom_title && (
-                          <span className="badge" style={{ background: '#eff6ff', color: '#1d4ed8', fontSize: 10 }}>
-                            {u.custom_title}
-                          </span>
-                        )}
-                      </div>
-                      <div style={{ fontSize: 11, color: '#64748b' }}>@{u.username}</div>
-                      {u.must_change_password && (
-                        <span style={{ fontSize: 11, color: '#f59e0b' }}>⚠️ 비번 변경 필요</span>
-                      )}
-                    </div>
-                  </td>
-                  <td>
-                    {u.status === 'approved' && <span className="badge badge-approved">승인됨</span>}
-                    {u.status === 'rejected' && <span className="badge badge-rejected">거절됨</span>}
-                  </td>
-                  {user.is_admin && (
-                    <td>
-                      <button
-                        onClick={() => handleToggleAdmin(u)}
-                        className={`btn btn-sm ${u.is_admin ? 'btn-primary' : 'btn-secondary'}`}
-                        style={{ fontSize: 11 }}
-                      >
-                        {u.is_admin ? '👑 슈퍼관리자' : '일반'}
-                      </button>
-                    </td>
-                  )}
-                  <td>
-                    <div style={{ fontSize: 12 }}>
-                      <span style={{ color: '#fbbf24', fontWeight: 600 }}>{(u.points ?? 0).toLocaleString()} P</span>
-                      <br />
-                      <span style={{ color: '#34d399', fontWeight: 600 }}>{(u.credits ?? 0).toLocaleString()} C</span>
-                    </div>
-                  </td>
-                  <td>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxWidth: 580 }}>
-                      {allRoles.length === 0 ? (
-                        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                          위 [역할 관리]에서 역할을 먼저 만들어 주세요.
-                        </span>
-                      ) : (
-                        allRoles.map((roleObj) => {
-                          const hasRole = u.roles?.some(r => r.id === roleObj.id);
-                          const canToggle = (user.is_admin || canManageRoles) && roleObj.manageable && (!u.is_admin || user.is_admin);
-                          const roleColor = roleObj.color || '#64748b';
-                          return (
-                            <button
-                              key={roleObj.id}
-                              type="button"
-                              disabled={!canToggle}
-                              onClick={() => handleToggleRole(u, roleObj)}
-                              title={
-                                roleObj.permissions?.length
-                                  ? `포함 권한: ${roleObj.permissions.join(', ')}`
-                                  : '권한 없음 (순수 랭크/칭호 역할)'
-                              }
-                              style={{
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: 5,
-                                padding: '4px 10px',
-                                borderRadius: 999,
-                                fontSize: 11,
-                                fontWeight: 700,
-                                cursor: canToggle ? 'pointer' : 'default',
-                                border: hasRole ? `1.5px solid ${roleColor}` : '1px solid var(--border-color)',
-                                background: hasRole ? `${roleColor}22` : 'var(--bg-secondary)',
-                                color: hasRole ? roleColor : 'var(--text-muted)',
-                                opacity: !canToggle && !hasRole ? 0.55 : 1,
-                                transition: 'all 0.15s ease'
-                              }}
-                            >
-                              <span style={{ width: 8, height: 8, borderRadius: '50%', background: roleColor }} />
-                              <span>{hasRole ? `✓ ${roleObj.name}` : `+ ${roleObj.name}`}</span>
-                            </button>
-                          );
-                        })
-                      )}
-                    </div>
-                    {u.permissions?.length > 0 && (
-                      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
-                        활성 권한: {u.permissions.join(' · ')}
-                      </div>
-                    )}
-                  </td>
-                  <td>
-                    <div style={{ display: 'flex', gap: 6 }}>
-                      {(user.is_admin || canManageAccounts) && (
-                        <button
-                          className="btn btn-secondary btn-sm"
-                          onClick={() => {
-                            setSelectedUser(u);
-                            setAssetForm({
-                              points: u.points,
-                              credits: u.credits,
-                              nickname: u.nickname || u.username,
-                              custom_title: u.custom_title || '',
-                              reason: '',
-                              sync_active_season: true
-                            });
-                            setShowAssetModal(true);
-                          }}
-                          title="프로필 및 포인트/크레딧 정밀 수정"
-                        >
-                          <DollarSign size={13} /> 수치·칭호 수정
-                        </button>
-                      )}
-                      <button
-                        className="btn btn-secondary btn-sm"
-                        onClick={() => handleResetPassword(u)}
-                        title="비밀번호 초기화"
-                      >
-                        <Key size={13} />
-                      </button>
-                      {u.username !== 'admin' && (
-                        <button
-                          className="btn btn-danger btn-sm"
-                          onClick={() => handleDeleteUser(u)}
-                          title="계정 삭제"
-                        >
-                          <Trash2 size={13} />
-                        </button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-                );
-              })}
-            </tbody>
-          </table>
+      {/* ===================================================================== */}
+      {/* 탭 7: 시스템 · 백업 · 브랜딩 (국가 이름 설정 + 전체 DB JSON 백업/복원) */}
+      {/* ===================================================================== */}
+      {activeSubTab === 'system' && user.is_admin && (
+        <div>
+          {/* 7-1. 국가 및 시스템 브랜딩 설정 */}
+          {isInitialAdmin ? (
+            <div className="card" style={{ border: '1px solid var(--border-color)', background: '#ffffff', marginBottom: 24, boxShadow: 'var(--shadow-sm)' }}>
+              <div className="card-header">
+                <div className="card-title">
+                  <Globe size={20} color="var(--primary)" />
+                  <span>국가 및 시스템 이름 설정 (최초 admin 전용)</span>
+                </div>
+                <span className="badge badge-approved">👑 최초 admin 권한 인증됨</span>
+              </div>
+              <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 16, lineHeight: 1.5 }}>
+                웹사이트 전역(사이드바, 헤더, 로그인 화면)에 노출되는 국가 이름, 시스템 타이틀, 로고 심볼을 오직 최초 admin 계정에서만 변경할 수 있습니다.
+              </p>
+
+              <form onSubmit={handleSaveBranding}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1.5fr 1fr', gap: 16 }}>
+                  <div className="form-group">
+                    <label className="form-label">시스템 이름 (영문/한글 · 자동저장)</label>
+                    <input
+                      type="text"
+                      className="input"
+                      placeholder="예: FEDERATION, ARCADIA"
+                      value={brandingForm.system_title}
+                      onChange={(e) => updateBrandingAutoSave({ system_title: e.target.value })}
+                      required
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">국가 이름 (한글 · 자동저장)</label>
+                    <input
+                      type="text"
+                      className="input"
+                      placeholder="예: 마인크래프트 연방 국가, 아르카디아 제국"
+                      value={brandingForm.nation_name}
+                      onChange={(e) => updateBrandingAutoSave({ nation_name: e.target.value })}
+                      required
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">서버 로고 심볼 (1~2글자 · 자동저장)</label>
+                    <input
+                      type="text"
+                      maxLength="4"
+                      className="input"
+                      placeholder="예: M, ⚔️, A"
+                      value={brandingForm.server_logo_text}
+                      onChange={(e) => updateBrandingAutoSave({ server_logo_text: e.target.value })}
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
+                  <button type="submit" className="btn btn-primary">
+                    국가 & 시스템 이름 저장 적용
+                  </button>
+                </div>
+              </form>
+            </div>
+          ) : (
+            <div style={{ padding: '12px 16px', background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', marginBottom: 24, fontSize: 13, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span>🔒 국가 및 시스템 브랜딩(이름/로고) 변경은 보안 정책에 따라 <strong>최초 admin</strong> 계정에서만 수정할 수 있습니다.</span>
+            </div>
+          )}
+
+          {/* 7-2. 데이터베이스 백업 & 복원 (JSON) */}
+          <div className="card" style={{ marginBottom: 28, border: '1px solid rgba(56, 189, 248, 0.3)' }}>
+            <div className="card-header">
+              <div className="card-title">
+                <Database size={20} color="#38bdf8" />
+                <span>데이터베이스 백업 & 복원 (JSON 추출 및 불러오기)</span>
+              </div>
+              <span className="badge badge-approved">🔒 슈퍼관리자 전용</span>
+            </div>
+
+            <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 20, lineHeight: 1.6 }}>
+              플랫폼의 모든 데이터(사용자 계정, 역할/권한, 재화, 물자 목록, 납품 신청 기록, 상점 및 주문, 공지사항, 디스코드 웹훅 설정, 단기 알바, 일정, 퀘스트, 시스템 브랜딩 등 14개 테이블 전체)를 <strong>JSON 파일 하나로 즉시 추출</strong>하거나 <strong>원클릭으로 복원</strong>할 수 있습니다. Render 클라우드 이전이나 주기적인 데이터 백업 시 안전하게 활용하세요.
+            </p>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+              {/* 백업 (내보내기) */}
+              <div style={{ padding: 16, background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 15, marginBottom: 8, color: '#38bdf8' }}>
+                    <Download size={18} />
+                    <span>데이터 JSON으로 추출 (다운로드)</span>
+                  </div>
+                  <p style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5, marginBottom: 16 }}>
+                    현재 시점의 전체 데이터베이스를 타임스탬프가 포함된 <code>.json</code> 파일로 다운로드합니다. 민감한 비밀번호 해시와 모든 테이블 관계가 정합성을 유지한 채 보관됩니다.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={handleExportData}
+                  disabled={backupLoading}
+                  style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
+                >
+                  {backupLoading ? <RefreshCw size={16} className="spin" /> : <Download size={16} />}
+                  <span>{backupLoading ? '데이터 추출 및 패키징 중...' : '전체 데이터 JSON 내보내기 (백업)'}</span>
+                </button>
+              </div>
+
+              {/* 복원 (불러오기) */}
+              <div style={{ padding: 16, background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 15, marginBottom: 8, color: '#f59e0b' }}>
+                    <Upload size={18} />
+                    <span>데이터 JSON으로 불러오기 (복원)</span>
+                  </div>
+                  <p style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5, marginBottom: 16 }}>
+                    기존에 내보낸 백업 <code>.json</code> 파일을 선택하여 데이터베이스를 그대로 복원합니다. 복원 시 기존 데이터가 안전하게 교체되며 복원 실행 전 확인 대화창이 팝업됩니다.
+                  </p>
+                </div>
+
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  accept=".json,application/json"
+                  style={{ display: 'none' }}
+                  onChange={handleImportFileSelect}
+                />
+
+                <button
+                  type="button"
+                  className="btn btn-warning"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={restoreLoading}
+                  style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
+                >
+                  {restoreLoading ? <RefreshCw size={16} className="spin" /> : <Upload size={16} />}
+                  <span>{restoreLoading ? '데이터베이스 복원 적용 중...' : 'JSON 백업 파일 선택 및 불러오기'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* 새 슈퍼 관리자 생성 모달 */}
       {showSuperAdminModal && (

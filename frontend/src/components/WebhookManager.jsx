@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { apiRequest } from '../api';
 import {
   Bell,
@@ -26,12 +26,16 @@ export default function WebhookManager() {
   const [globalUrl, setGlobalUrl] = useState('');
   const [configs, setConfigs] = useState([]);
   const [selectedCategory, setSelectedCategory] = useState('지급 및 재화 기록');
+  const [selectedEventKey, setSelectedEventKey] = useState('ALL');
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryBulkUrl, setCategoryBulkUrl] = useState('');
   const [loading, setLoading] = useState(true);
   const [savingAll, setSavingAll] = useState(false);
   const [testingKey, setTestingKey] = useState(null);
   const [savingKey, setSavingKey] = useState(null);
+  const [autoSaveStatus, setAutoSaveStatus] = useState('💾 SQLite 실시간 자동저장');
+  const itemSaveTimersRef = useRef({});
+  const globalUrlTimerRef = useRef(null);
 
   const loadWebhooks = async () => {
     try {
@@ -50,10 +54,53 @@ export default function WebhookManager() {
     loadWebhooks();
   }, []);
 
+  const handleUpdateGlobalUrl = (nextUrl) => {
+    setGlobalUrl(nextUrl);
+    if (globalUrlTimerRef.current) clearTimeout(globalUrlTimerRef.current);
+    setAutoSaveStatus('⏳ 기본 웹훅 URL 자동 저장 대기...');
+    globalUrlTimerRef.current = setTimeout(async () => {
+      try {
+        setAutoSaveStatus('⏳ SQLite 저장 중...');
+        await apiRequest('/webhooks', {
+          method: 'PUT',
+          body: JSON.stringify({ global_webhook_url: nextUrl })
+        });
+        setAutoSaveStatus(`✅ 자동 저장됨 (${new Date().toLocaleTimeString('ko-KR', { hour12: false })})`);
+      } catch (err) {
+        console.error(err);
+        setAutoSaveStatus('⚠️ 자동 저장 오류');
+      }
+    }, 600);
+  };
+
   const handleUpdateItem = (eventKey, patch) => {
-    setConfigs(prev =>
-      prev.map(item => (item.event_key === eventKey ? { ...item, ...patch } : item))
-    );
+    setConfigs(prev => {
+      const next = prev.map(item => (item.event_key === eventKey ? { ...item, ...patch } : item));
+      const updatedItem = next.find(item => item.event_key === eventKey);
+      if (updatedItem) {
+        if (itemSaveTimersRef.current[eventKey]) {
+          clearTimeout(itemSaveTimersRef.current[eventKey]);
+        }
+        setAutoSaveStatus(`⏳ [${updatedItem.label}] 자동 저장 대기...`);
+        itemSaveTimersRef.current[eventKey] = setTimeout(async () => {
+          try {
+            setSavingKey(eventKey);
+            setAutoSaveStatus(`⏳ [${updatedItem.label}] SQLite 저장 중...`);
+            await apiRequest(`/webhooks/${eventKey}`, {
+              method: 'PUT',
+              body: JSON.stringify(updatedItem)
+            });
+            setAutoSaveStatus(`✅ 자동 저장됨 (${new Date().toLocaleTimeString('ko-KR', { hour12: false })})`);
+          } catch (err) {
+            console.error(err);
+            setAutoSaveStatus('⚠️ 자동 저장 오류');
+          } finally {
+            setSavingKey(null);
+          }
+        }, 550);
+      }
+      return next;
+    });
   };
 
   const handleToggleItem = async (item) => {
@@ -154,25 +201,44 @@ export default function WebhookManager() {
     }
   };
 
-  const handleApplyCategoryUrl = () => {
+  const handleApplyCategoryUrl = async () => {
     const targetKeys = filteredConfigs.map(c => c.event_key);
-    setConfigs(prev =>
-      prev.map(c =>
-        targetKeys.includes(c.event_key) ? { ...c, webhook_url: categoryBulkUrl.trim() } : c
-      )
+    const updated = configs.map(c =>
+      targetKeys.includes(c.event_key) ? { ...c, webhook_url: categoryBulkUrl.trim() } : c
     );
-    alert(`현재 표시된 ${targetKeys.length}개 항목에 웹훅 URL이 입력되었습니다. 우측 상단 [전체 설정 일괄 저장]을 눌러 반영하세요.`);
+    setConfigs(updated);
+    try {
+      setSavingAll(true);
+      setAutoSaveStatus('⏳ 일괄 웹훅 URL SQLite 저장 중...');
+      const res = await apiRequest('/webhooks', {
+        method: 'PUT',
+        body: JSON.stringify({
+          global_webhook_url: globalUrl,
+          configs: updated
+        })
+      });
+      if (res.configs) setConfigs(res.configs);
+      setAutoSaveStatus(`✅ 일괄 자동 저장됨 (${new Date().toLocaleTimeString('ko-KR', { hour12: false })})`);
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setSavingAll(false);
+    }
   };
 
-  const filteredConfigs = configs.filter(item => {
-    const matchCat = selectedCategory === '전체' || item.category === selectedCategory;
+  const categoryFilteredConfigs = configs.filter(item => {
+    return selectedCategory === '전체' || item.category === selectedCategory;
+  });
+
+  const filteredConfigs = categoryFilteredConfigs.filter(item => {
+    const matchEvent = selectedEventKey === 'ALL' || item.event_key === selectedEventKey;
     const q = searchQuery.trim().toLowerCase();
     const matchSearch =
       !q ||
       (item.label || '').toLowerCase().includes(q) ||
       (item.description || '').toLowerCase().includes(q) ||
       (item.event_key || '').toLowerCase().includes(q);
-    return matchCat && matchSearch;
+    return matchEvent && matchSearch;
   });
 
   const enabledCount = configs.filter(c => c.enabled).length;
@@ -186,6 +252,9 @@ export default function WebhookManager() {
             <span>디스코드 웹훅 통합 & 개별 상세 설정 센터 (총 {configs.length}종 이벤트)</span>
             <span className="badge badge-approved" style={{ marginLeft: 6 }}>
               활성 {enabledCount} / {configs.length}
+            </span>
+            <span className="badge" style={{ background: '#eff6ff', color: '#1d4ed8', marginLeft: 4 }}>
+              {autoSaveStatus}
             </span>
           </div>
           <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 4 }}>
@@ -237,9 +306,9 @@ export default function WebhookManager() {
           <input
             type="url"
             className="input"
-            placeholder="https://discord.com/api/webhooks/..."
+            placeholder="https://discord.com/api/webhooks/... (입력 시 자동 저장)"
             value={globalUrl}
-            onChange={e => setGlobalUrl(e.target.value)}
+            onChange={e => handleUpdateGlobalUrl(e.target.value)}
             style={{ flex: 1, minWidth: 260 }}
           />
           <button
@@ -267,7 +336,10 @@ export default function WebhookManager() {
               <button
                 key={cat}
                 type="button"
-                onClick={() => setSelectedCategory(cat)}
+                onClick={() => {
+                  setSelectedCategory(cat);
+                  setSelectedEventKey('ALL');
+                }}
                 className={`btn btn-sm ${isSelected ? 'btn-primary' : 'btn-secondary'}`}
                 style={{ fontWeight: isSelected ? 700 : 500 }}
               >
@@ -287,7 +359,21 @@ export default function WebhookManager() {
           })}
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <select
+            className="select"
+            value={selectedEventKey}
+            onChange={e => setSelectedEventKey(e.target.value)}
+            style={{ width: 'auto', minWidth: 200, height: 34, padding: '4px 12px', fontSize: 12, fontWeight: 600 }}
+          >
+            <option value="ALL">📌 세부 웹훅 항목 선택 ({categoryFilteredConfigs.length}개 전체 보기)</option>
+            {categoryFilteredConfigs.map(ev => (
+              <option key={ev.event_key} value={ev.event_key}>
+                {ev.enabled ? '🟢' : '⚪'} {ev.label} ({ev.event_key})
+              </option>
+            ))}
+          </select>
+
           <div style={{ position: 'relative' }}>
             <Search size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
             <input
@@ -296,7 +382,7 @@ export default function WebhookManager() {
               placeholder="웹훅 이름/키 검색..."
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
-              style={{ paddingLeft: 30, width: 210, height: 34, fontSize: 13 }}
+              style={{ paddingLeft: 30, width: 190, height: 34, fontSize: 13 }}
             />
           </div>
         </div>

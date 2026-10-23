@@ -8,7 +8,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
-  db, initDatabase, recordAssetTransaction,
+  db, initDatabase, recordAssetTransaction, flushDatabase,
   PERMISSION_CATALOG, WEBHOOK_EVENT_CATALOG, sanitizePermissions, normalizeRolePositions,
   getUserAccess, migrateLegacyUserPermissions
 } from './db.js';
@@ -55,6 +55,23 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use('/uploads', express.static(uploadDir));
+
+// 모든 데이터 변경 요청(POST, PUT, DELETE, PATCH) 완료 시 즉시 SQLite 디스크 동기화 (무료 서버 슬립 대비)
+app.use((req, res, next) => {
+  if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(req.method)) {
+    res.on('finish', () => {
+      if (res.statusCode >= 200 && res.statusCode < 400) {
+        flushDatabase('PASSIVE');
+      }
+    });
+  }
+  next();
+});
+
+// 무료 서버 절전(슬립) 방지 및 헬스 체크 엔드포인트
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
 
 // --- Auth 미들웨어 ---
 function authenticateToken(req, res, next) {
@@ -466,13 +483,15 @@ app.put('/api/roles/:id', authenticateToken, (req, res) => {
 
   db.prepare('UPDATE roles SET name = ?, color = ?, permissions = ? WHERE id = ?')
     .run(name, req.body.color || role.color, JSON.stringify(perms), role.id);
-  sendDiscordWebhook('role_change', {
-    action_title: '역할 설정 및 권한 수정',
-    target_name: name,
-    detail: perms.length ? `포함 권한: ${perms.join(', ')}` : '권한 없음',
-    description: `'${name}' 역할의 이름/색상/권한 설정이 수정되었습니다.`,
-    actor_name: `${req.user.nickname || req.user.username} (@${req.user.username})`
-  });
+  if (!req.body.auto_save) {
+    sendDiscordWebhook('role_change', {
+      action_title: '역할 설정 및 권한 수정',
+      target_name: name,
+      detail: perms.length ? `포함 권한: ${perms.join(', ')}` : '권한 없음',
+      description: `'${name}' 역할의 이름/색상/권한 설정이 수정되었습니다.`,
+      actor_name: `${req.user.nickname || req.user.username} (@${req.user.username})`
+    });
+  }
   res.json({ message: `'${name}' 역할이 저장되었습니다.` });
 });
 
@@ -726,8 +745,8 @@ app.put('/api/notices/:category', authenticateToken, requireRole('공지 관리'
   }
 
   let webhookMessage = '';
-  // 즉시 전송 요청이 있거나 자동 웹훅이 활성화된 경우 디스코드 발송
-  if (send_now || webhook_enabled) {
+  // 즉시 전송 요청이 있거나 (자동 저장이 아닌 수동 저장 시) 자동 웹훅이 활성화된 경우 디스코드 발송
+  if (send_now || (!req.body.auto_save && webhook_enabled)) {
     try {
       await sendNoticeDiscordWebhook({
         category: req.params.category,
@@ -3494,4 +3513,12 @@ if (clientDist) {
 // 서버 실행
 app.listen(PORT, () => {
   console.log(`[Backend] Minecraft Platform Server running on port ${PORT}`);
+
+  // Render 등 무료 클라우드 서버 15분 절전(슬립) 방지를 위한 자체 Keep-Alive 타이머 (10분 주기)
+  const selfUrl = process.env.RENDER_EXTERNAL_URL || process.env.SELF_URL;
+  if (selfUrl) {
+    setInterval(() => {
+      fetch(`${selfUrl.replace(/\/$/, '')}/api/health`).catch(() => {});
+    }, 10 * 60 * 1000);
+  }
 });

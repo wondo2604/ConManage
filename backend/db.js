@@ -14,9 +14,27 @@ if (!fs.existsSync(dataDir)) {
 const dbPath = path.join(dataDir, 'database.sqlite');
 export const db = new DatabaseSync(dbPath);
 
-// 외래키 및 WAL 모드 활성화
+// 외래키, WAL 모드 및 무료 서버 강제 종료 대비 즉시 디스크 동기화 활성화
 db.exec(`PRAGMA journal_mode = WAL;`);
+db.exec(`PRAGMA synchronous = FULL;`);
+db.exec(`PRAGMA wal_autocheckpoint = 1;`);
 db.exec(`PRAGMA foreign_keys = ON;`);
+
+// SQLite WAL 버퍼를 본 데이터베이스 파일(database.sqlite)로 즉시 플러시
+export function flushDatabase(mode = 'PASSIVE') {
+  try {
+    db.exec(`PRAGMA wal_checkpoint(${mode});`);
+  } catch (err) {
+    console.error('[SQLite Checkpoint Error]', err.message);
+  }
+}
+
+// 무료 서버 슬립/종료 시그널 발생 시 WAL 데이터를 즉시 본 파일로 병합
+for (const sig of ['SIGTERM', 'SIGINT', 'beforeExit']) {
+  process.on(sig, () => {
+    flushDatabase('TRUNCATE');
+  });
+}
 
 // 권한(Permission) 카탈로그 — 디스코드처럼 '역할(Role)'에 이 권한들을 묶어서 부여한다.
 // key 문자열은 서버 전역의 권한 체크(requireRole 등)에서 그대로 사용되므로 변경 시 주의.
