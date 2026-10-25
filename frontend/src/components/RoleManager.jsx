@@ -40,12 +40,14 @@ export default function RoleManager({ user, users, onChanged, refreshKey = 0 }) 
   const roleById = useMemo(() => Object.fromEntries(roles.map(r => [r.id, r])), [roles]);
   const selected = selectedId ? roleById[selectedId] : null;
   const orderDirty = order.some((id, i) => roles[i]?.id !== id);
+  const loadedRoleIdRef = useRef(null);
 
   useEffect(() => {
-    if (selected) {
+    if (selected && loadedRoleIdRef.current !== selectedId) {
+      loadedRoleIdRef.current = selectedId;
       setForm({ name: selected.name, color: selected.color || '#99aab5', permissions: selected.permissions || [] });
     }
-  }, [selectedId, roles]);
+  }, [selectedId, selected]);
 
   const groupedCatalog = useMemo(() => {
     const groups = {};
@@ -79,6 +81,10 @@ export default function RoleManager({ user, users, onChanged, refreshKey = 0 }) 
 
   const handleSave = async (customForm = null, isAuto = false) => {
     if (!selected) return;
+    if (!isAuto && autoSaveTimerRef.current) {
+      clearTimeout(autoSaveTimerRef.current);
+      autoSaveTimerRef.current = null;
+    }
     const payload = customForm || form;
     if (!String(payload.name || '').trim()) return;
     try {
@@ -88,17 +94,13 @@ export default function RoleManager({ user, users, onChanged, refreshKey = 0 }) 
         method: 'PUT',
         body: JSON.stringify({ ...payload, auto_save: isAuto })
       });
-      if (isAuto) {
-        setRoles(prev =>
-          prev.map(r =>
-            r.id === selected.id
-              ? { ...r, name: payload.name, color: payload.color, permissions: payload.permissions }
-              : r
-          )
-        );
-      } else {
-        await load();
-      }
+      setRoles(prev =>
+        prev.map(r =>
+          r.id === selected.id
+            ? { ...r, name: payload.name, color: payload.color, permissions: payload.permissions }
+            : r
+        )
+      );
       setAutoSaveText(`✅ 자동 저장됨 (${new Date().toLocaleTimeString('ko-KR', { hour12: false })})`);
       onChanged?.();
     } catch (err) {

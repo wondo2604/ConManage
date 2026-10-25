@@ -21,7 +21,7 @@ db.exec(`PRAGMA wal_autocheckpoint = 1;`);
 db.exec(`PRAGMA foreign_keys = ON;`);
 
 // SQLite WAL 버퍼를 본 데이터베이스 파일(database.sqlite)로 즉시 플러시
-export function flushDatabase(mode = 'PASSIVE') {
+export function flushDatabase(mode = 'TRUNCATE') {
   try {
     db.exec(`PRAGMA wal_checkpoint(${mode});`);
   } catch (err) {
@@ -676,7 +676,9 @@ export function initDatabase() {
     ranking_board_notice: '이번 시즌도 함께 국가를 키워가요! 납품·퀘스트·알바 하나하나가 모두 기여도로 기록됩니다.',
     ranking_show_credit_tab: '1',
     ranking_top_limit: '100',
-    allow_custom_supply: '1'
+    allow_custom_supply: '1',
+    db_epoch: '1',
+    write_count: '0'
   };
   const upsertSetting = db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)");
   for (const [k, v] of Object.entries(defaultSettings)) {
@@ -696,7 +698,7 @@ export function initDatabase() {
     const defaultHash = bcrypt.hashSync('admin', 10);
     db.prepare(`
       INSERT INTO users (username, password, nickname, points, credits, must_change_password, is_admin, roles, status)
-      VALUES (?, ?, ?, 1000, 50000, 1, 1, '[]', 'approved')
+      VALUES (?, ?, ?, 0, 0, 1, 1, '[]', 'approved')
     `).run('admin', defaultHash, '슈퍼관리자');
   }
 
@@ -720,20 +722,6 @@ export function initDatabase() {
       insertDefaultRole.run(r.name, r.color, idx + 1, JSON.stringify(r.permissions));
     });
     db.prepare(`INSERT OR REPLACE INTO settings (key, value) VALUES ('roles_seeded', '1')`).run();
-  }
-
-  // 역할 이름이 권한명과 일치하는데 permissions 배열이 비어있는 경우 자동 보정 (예: '사업가' 역할을 만들고 권한 체크를 누락한 경우)
-  const existingRoles = db.prepare('SELECT id, name, permissions FROM roles').all();
-  const updateRolePerms = db.prepare('UPDATE roles SET permissions = ? WHERE id = ?');
-  for (const r of existingRoles) {
-    const currentPerms = parseJsonArray(r.permissions);
-    const matchedPerms = ALL_PERMISSIONS.filter(p => r.name === p || r.name.includes(p));
-    if (matchedPerms.length > 0) {
-      const merged = [...new Set([...currentPerms, ...matchedPerms])];
-      if (merged.length !== currentPerms.length) {
-        updateRolePerms.run(JSON.stringify(merged), r.id);
-      }
-    }
   }
 
   // 초기 기본 활성 시즌 생성
@@ -804,12 +792,6 @@ export function getUserAccess(userId) {
   const perms = new Set();
   roles.forEach(r => {
     r.permissions.forEach(p => perms.add(p));
-    // 역할 이름 자체가 권한명(예: '사업가', '기업 관리' 등)과 같거나 포함하면 해당 권한도 자동 인정
-    ALL_PERMISSIONS.forEach(p => {
-      if (r.name === p || r.name?.includes(p)) {
-        perms.add(p);
-      }
-    });
   });
 
   // 혹시 legacy users.roles 컬럼에 남아있는 권한 문자열이 있다면 함께 합산
@@ -945,4 +927,105 @@ export function recordAssetTransaction({
   } catch (err) {
     console.error('[recordAssetTransaction Error]', err);
   }
+}
+
+export function incrementWriteCount() {
+  try {
+    db.prepare(`
+      INSERT INTO settings (key, value) VALUES ('write_count', '1')
+      ON CONFLICT(key) DO UPDATE SET value = CAST(COALESCE(value, '0') AS INTEGER) + 1
+    `).run();
+  } catch (_) {}
+}
+
+/**
+ * 데이터베이스 초기화 헬퍼
+ * @param {'all'|'activity'} mode - 'all': 전체 공장 초기화 (슈퍼관리자 계정만 유지), 'activity': 운영 내역·재화만 초기화 (계정/역할/웹훅/브랜딩 유지)
+ * @param {{ resetAdminPassword?: boolean, uploadDir?: string }} options
+ */
+export function resetDatabase(mode = 'all', options = {}) {
+  const newEpoch = String(Date.now());
+  const existingAdmin = db.prepare("SELECT * FROM users WHERE username = 'admin' ORDER BY id ASC LIMIT 1").get();
+
+  db.exec('PRAGMA foreign_keys = OFF;');
+  db.exec('BEGIN TRANSACTION;');
+  try {
+    const activityTables = [
+      'asset_transactions',
+      'credit_charges',
+      'credit_exchanges',
+      'quest_submissions',
+      'quests',
+      'schedules',
+      'part_time_jobs',
+      'shop_orders',
+      'shop_items',
+      'supply_requests',
+      'supplies',
+      'user_season_points',
+      'seasons'
+    ];
+
+    for (const t of activityTables) {
+      db.prepare(`DELETE FROM ${t}`).run();
+      try { db.prepare(`DELETE FROM sqlite_sequence WHERE name = ?`).run(t); } catch (_) {}
+    }
+
+    if (mode === 'activity') {
+      db.prepare(`UPDATE users SET points = 0, credits = 0, custom_title = ''`).run();
+    } else {
+      const fullResetTables = [
+        'notices',
+        'ranking_tiers',
+        'user_roles',
+        'roles',
+        'webhook_configs',
+        'settings',
+        'users'
+      ];
+      for (const t of fullResetTables) {
+        db.prepare(`DELETE FROM ${t}`).run();
+        try { db.prepare(`DELETE FROM sqlite_sequence WHERE name = ?`).run(t); } catch (_) {}
+      }
+
+      const adminPw = (!options.resetAdminPassword && existingAdmin?.password)
+        ? existingAdmin.password
+        : bcrypt.hashSync('admin', 10);
+      const mustChange = options.resetAdminPassword ? 1 : (existingAdmin ? (existingAdmin.must_change_password ?? 0) : 0);
+
+      db.prepare(`
+        INSERT INTO users (id, username, password, nickname, points, credits, custom_title, must_change_password, is_admin, roles, status)
+        VALUES (1, 'admin', ?, '슈퍼관리자', 0, 0, '', ?, 1, '[]', 'approved')
+      `).run(adminPw, mustChange);
+    }
+
+    db.exec('COMMIT;');
+  } catch (err) {
+    try { db.exec('ROLLBACK;'); } catch (_) {}
+    throw err;
+  } finally {
+    try { db.exec('PRAGMA foreign_keys = ON;'); } catch (_) {}
+  }
+
+  // 기본 시드 데이터 재생성
+  initDatabase();
+
+  // 새 에포크 및 쓰기 카운트 기록
+  db.prepare(`INSERT INTO settings (key, value) VALUES ('db_epoch', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(newEpoch);
+  db.prepare(`INSERT INTO settings (key, value) VALUES ('write_count', '0') ON CONFLICT(key) DO UPDATE SET value = '0'`).run();
+
+  if (options.uploadDir && fs.existsSync(options.uploadDir)) {
+    try {
+      for (const f of fs.readdirSync(options.uploadDir)) {
+        if (f === '.gitkeep') continue;
+        const fp = path.join(options.uploadDir, f);
+        if (fs.statSync(fp).isFile()) {
+          fs.unlinkSync(fp);
+        }
+      }
+    } catch (_) {}
+  }
+
+  flushDatabase('TRUNCATE');
+  return { mode, db_epoch: newEpoch, write_count: 0 };
 }

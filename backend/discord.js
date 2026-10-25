@@ -14,16 +14,21 @@ export function getAllWebhookConfigs() {
 
   return WEBHOOK_EVENT_CATALOG.map(meta => {
     const saved = map.get(meta.event_key);
+    const defaultColor = meta.default_color || '#3b82f6';
+    const savedColor = saved?.embed_color || defaultColor;
     return {
       event_key: meta.event_key,
       name: meta.name,
+      label: meta.name,
       category: meta.category,
       description: meta.description,
       enabled: saved ? (saved.enabled ? 1 : 0) : (meta.default_enabled ?? 1),
       webhook_url: saved?.webhook_url || '',
       mention_type: saved?.mention_type || meta.default_mention || 'none',
       custom_mention: saved?.custom_mention || '',
-      embed_color: saved?.embed_color || meta.default_color || '#3b82f6',
+      embed_color: savedColor,
+      custom_color: saved?.embed_color && saved.embed_color !== defaultColor ? saved.embed_color : (saved?.embed_color || ''),
+      default_color: defaultColor,
       updated_at: saved?.updated_at || null
     };
   });
@@ -35,17 +40,22 @@ export function getAllWebhookConfigs() {
 export function getEventWebhookConfig(eventKey) {
   const meta = WEBHOOK_EVENT_CATALOG.find(m => m.event_key === eventKey);
   const saved = db.prepare('SELECT * FROM webhook_configs WHERE event_key = ?').get(eventKey);
+  const defaultColor = meta?.default_color || '#3b82f6';
+  const savedColor = saved?.embed_color || defaultColor;
 
   return {
     event_key: eventKey,
     name: meta?.name || eventKey,
+    label: meta?.name || eventKey,
     category: meta?.category || '기타',
     description: meta?.description || '',
     enabled: saved ? (saved.enabled ? 1 : 0) : (meta?.default_enabled ?? 1),
     webhook_url: saved?.webhook_url || '',
     mention_type: saved?.mention_type || meta?.default_mention || 'none',
     custom_mention: saved?.custom_mention || '',
-    embed_color: saved?.embed_color || meta?.default_color || '#3b82f6'
+    embed_color: savedColor,
+    custom_color: savedColor,
+    default_color: defaultColor
   };
 }
 
@@ -83,6 +93,8 @@ function buildMentionContent(mentionType, customMention = '', isTest = false) {
     mention = '@here';
   } else if (mentionType === 'custom' && customMention && customMention.trim()) {
     mention = customMention.trim();
+  } else if (mentionType && mentionType !== 'none' && mentionType !== 'custom') {
+    mention = String(mentionType).trim();
   }
   const testPrefix = isTest ? '🧪 **[웹훅 연동 테스트 발송]**' : '';
   return [mention, testPrefix].filter(Boolean).join(' ').trim() || undefined;
@@ -629,6 +641,9 @@ export async function sendDiscordWebhook(type, data = {}, options = {}) {
  * 개별 이벤트 테스트 발송용 샘플 데이터 생성기
  */
 export async function sendTestEventWebhook(eventKey, overrides = {}, actorUser = null) {
+  const normalizedOverrides = typeof overrides === 'string'
+    ? (overrides.trim() ? { webhook_url: overrides.trim() } : {})
+    : (overrides || {});
   const actorName = actorUser ? `${actorUser.nickname || actorUser.username} (@${actorUser.username})` : '슈퍼관리자 (@admin)';
   const sampleData = {
     id: 101,
@@ -699,10 +714,11 @@ export async function sendTestEventWebhook(eventKey, overrides = {}, actorUser =
     detail: '물자 보급관 역할 부여'
   };
 
-  return sendDiscordWebhook(eventKey, sampleData, {
-    ...overrides,
+  const res = await sendDiscordWebhook(eventKey, sampleData, {
+    ...normalizedOverrides,
     isTest: true
   });
+  return { ...res, ok: Boolean(res?.success) };
 }
 
 // SQLite 원장(recordAssetTransaction) 기록 시 자동으로 지급(asset_payout) / 차감(asset_deduct) 웹훅 발송 연동

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { apiRequest, setAuthToken, getAuthToken } from './api';
 import LoginView from './components/LoginView';
 import ChangePasswordModal from './components/ChangePasswordModal';
@@ -36,15 +36,21 @@ export default function App() {
   const [branding, setBranding] = useState({
     system_title: 'FEDERATION',
     nation_name: '마인크래프트 전쟁 관리',
-    server_logo_text: 'M'
+    server_logo_text: 'M',
+    db_epoch: '1',
+    write_count: '0'
   });
+  const autoBackupTimerRef = useRef(null);
+  const autoRestoreInProgressRef = useRef(false);
 
   const refreshBranding = async () => {
     try {
       const data = await apiRequest('/settings/branding');
       if (data) setBranding(data);
+      return data;
     } catch (err) {
       console.error('Branding fetch error:', err);
+      return null;
     }
   };
 
@@ -79,6 +85,69 @@ export default function App() {
     }, 4 * 60 * 1000);
     return () => clearInterval(keepAliveTimer);
   }, []);
+
+  // 무료 서버 컨테이너 재시작 시 브라우저 로컬 스냅샷 자동 동기화 및 복구 (슈퍼관리자 전용)
+  useEffect(() => {
+    if (!user?.is_admin) return;
+
+    const saveSnapshotToLocal = async () => {
+      if (autoRestoreInProgressRef.current) return;
+      try {
+        const payload = await apiRequest('/admin/export');
+        const settingsRows = payload?.data?.settings || [];
+        const epochRow = settingsRows.find(r => r.key === 'db_epoch');
+        const writeRow = settingsRows.find(r => r.key === 'write_count');
+        const db_epoch = epochRow?.value || '1';
+        const write_count = Number(writeRow?.value || 0);
+        if (write_count > 0) {
+          localStorage.setItem('mc_platform_auto_backup_v1', JSON.stringify({
+            db_epoch,
+            write_count,
+            saved_at: new Date().toISOString(),
+            payload
+          }));
+        }
+      } catch (_) {}
+    };
+
+    const handleDbMutated = () => {
+      if (autoBackupTimerRef.current) clearTimeout(autoBackupTimerRef.current);
+      autoBackupTimerRef.current = setTimeout(saveSnapshotToLocal, 1200);
+    };
+
+    window.addEventListener('mc-db-mutated', handleDbMutated);
+
+    // 서버가 컨테이너 재시작으로 인해 초기 상태(write_count === 0)로 돌아간 경우 자동 복원
+    (async () => {
+      try {
+        const raw = localStorage.getItem('mc_platform_auto_backup_v1');
+        if (!raw) return;
+        const saved = JSON.parse(raw);
+        const latestBranding = await refreshBranding();
+        if (!latestBranding) return;
+        const serverEpoch = String(latestBranding.db_epoch || '1');
+        const serverWrites = Number(latestBranding.write_count || 0);
+
+        if (saved?.payload && String(saved.db_epoch) === serverEpoch && Number(saved.write_count) > 0 && serverWrites === 0) {
+          autoRestoreInProgressRef.current = true;
+          await apiRequest('/admin/import', {
+            method: 'POST',
+            body: JSON.stringify(saved.payload)
+          });
+          await refreshBranding();
+          await refreshUser();
+          autoRestoreInProgressRef.current = false;
+        }
+      } catch (_) {
+        autoRestoreInProgressRef.current = false;
+      }
+    })();
+
+    return () => {
+      window.removeEventListener('mc-db-mutated', handleDbMutated);
+      if (autoBackupTimerRef.current) clearTimeout(autoBackupTimerRef.current);
+    };
+  }, [user?.is_admin]);
 
   const handleLogout = () => {
     if (confirm('로그아웃 하시겠습니까?')) {

@@ -36,5 +36,19 @@ export async function apiRequest(endpoint, options = {}) {
     throw new Error(data?.error || `요청 실패 (${res.status})`);
   }
 
+  const method = (options.method || 'GET').toUpperCase();
+  if (
+    ['POST', 'PUT', 'DELETE', 'PATCH'].includes(method) &&
+    !endpoint.startsWith('/auth/login') &&
+    !endpoint.startsWith('/admin/import') &&
+    !endpoint.startsWith('/admin/reset') &&
+    !endpoint.endsWith('/test') &&
+    !endpoint.endsWith('/test-webhook')
+  ) {
+    try {
+      window.dispatchEvent(new CustomEvent('mc-db-mutated'));
+    } catch (_) {}
+  }
+
   return data;
 }

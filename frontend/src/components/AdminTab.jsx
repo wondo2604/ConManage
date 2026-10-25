@@ -56,6 +56,7 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
   const [loading, setLoading] = useState(true);
   const [backupLoading, setBackupLoading] = useState(false);
   const [restoreLoading, setRestoreLoading] = useState(false);
+  const [resetLoading, setResetLoading] = useState(false);
   const [testingNoticeWebhook, setTestingNoticeWebhook] = useState(false);
 
   // 사용자 검색 및 역할 표시 방식 상태
@@ -113,7 +114,7 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
     description: ''
   });
 
-  const isInitialAdmin = user.username === 'admin';
+  const isInitialAdmin = Boolean(user.is_admin || user.username === 'admin');
   const canManageAccounts = user.is_admin || user.permissions?.includes('계정 관리');
   const canManageRoles = user.is_admin || user.permissions?.includes('역할 관리');
   const canManageNotices = user.is_admin || user.permissions?.includes('공지 관리');
@@ -224,7 +225,20 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
     }
   };
 
-  const loadData = async () => {
+  const refreshRolesAndUsers = async () => {
+    try {
+      const [usersData, rolesData] = await Promise.all([
+        (canManageAccounts || canManageRoles || canManageData || canManageRanking) ? apiRequest('/users').catch(() => []) : Promise.resolve([]),
+        apiRequest('/roles').catch(() => [])
+      ]);
+      setUsers(Array.isArray(usersData) ? usersData : []);
+      setAllRoles(Array.isArray(rolesData) ? rolesData : []);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const loadData = async (isInitial = false) => {
     try {
       setLoading(true);
       const [usersData, rolesData, settingsData, noticesData, rankCfg, creditCfg] = await Promise.all([
@@ -240,7 +254,7 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
       setSettings(settingsData || {});
       setNotices(Array.isArray(noticesData) ? noticesData : []);
 
-      if (rankCfg || creditCfg) {
+      if ((isInitial || !numericTimerRef.current) && (rankCfg || creditCfg)) {
         setGlobalNumericConfig(prev => ({
           ...prev,
           ...(rankCfg || {}),
@@ -253,17 +267,19 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
       }
 
       // 기본 선택 공지 폼 설정 (supply)
-      const currentNotice = (noticesData || []).find(n => n.category === selectedNoticeCategory) || (noticesData || [])[0];
-      if (currentNotice) {
-        setNoticeWebhookForm({
-          title: currentNotice.title || '',
-          content: currentNotice.content || '',
-          webhook_url: currentNotice.webhook_url || '',
-          webhook_enabled: currentNotice.webhook_enabled ? 1 : 0,
-          mention_type: currentNotice.mention_type || 'none',
-          embed_color: currentNotice.embed_color || '#3b82f6',
-          message_template: currentNotice.message_template || ''
-        });
+      if (isInitial || !noticeTimerRef.current) {
+        const currentNotice = (noticesData || []).find(n => n.category === selectedNoticeCategory) || (noticesData || [])[0];
+        if (currentNotice) {
+          setNoticeWebhookForm({
+            title: currentNotice.title || '',
+            content: currentNotice.content || '',
+            webhook_url: currentNotice.webhook_url || '',
+            webhook_enabled: currentNotice.webhook_enabled ? 1 : 0,
+            mention_type: currentNotice.mention_type || 'none',
+            embed_color: currentNotice.embed_color || '#3b82f6',
+            message_template: currentNotice.message_template || ''
+          });
+        }
       }
     } catch (err) {
       console.error(err);
@@ -273,22 +289,29 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
   };
 
   useEffect(() => {
-    loadData();
-    if (branding) {
+    loadData(true);
+  }, []);
+
+  useEffect(() => {
+    if (branding && !brandingTimerRef.current) {
       setBrandingForm({
-        system_title: branding.system_title,
-        nation_name: branding.nation_name,
-        server_logo_text: branding.server_logo_text
+        system_title: branding.system_title || 'FEDERATION',
+        nation_name: branding.nation_name || '마인크래프트 전쟁 관리',
+        server_logo_text: branding.server_logo_text || 'M'
       });
     }
-  }, [branding]);
+  }, [branding?.system_title, branding?.nation_name, branding?.server_logo_text]);
 
-  // 브랜딩 저장 (오직 최초 admin만 가능) - 입력 즉시 SQLite 자동 저장 지원
+  // 브랜딩 저장 (슈퍼관리자 가능) - 입력 즉시 SQLite 자동 저장 지원
   const handleSaveBranding = async (e, customData = null, isAuto = false) => {
     if (e && e.preventDefault) e.preventDefault();
     if (!isInitialAdmin) {
-      if (!isAuto) alert('국가 및 시스템 이름은 최초 admin 계정에서만 수정할 수 있습니다.');
+      if (!isAuto) alert('국가 및 시스템 이름은 슈퍼관리자 계정에서만 수정할 수 있습니다.');
       return;
+    }
+    if (!isAuto && brandingTimerRef.current) {
+      clearTimeout(brandingTimerRef.current);
+      brandingTimerRef.current = null;
     }
 
     const payload = customData || brandingForm;
@@ -302,10 +325,12 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
         method: 'PUT',
         body: JSON.stringify(payload)
       });
+      brandingTimerRef.current = null;
       setAutoSaveStatus(`✅ 자동 저장됨 (${new Date().toLocaleTimeString('ko-KR', { hour12: false })})`);
       if (!isAuto) alert(res.message);
       if (refreshBranding) refreshBranding();
     } catch (err) {
+      brandingTimerRef.current = null;
       setAutoSaveStatus('⚠️ 저장 오류');
       if (!isAuto) alert(err.message);
     }
@@ -448,6 +473,10 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
 
   const handleSaveGlobalNumericConfig = async (e, customCfg = null, isAuto = false) => {
     if (e && e.preventDefault) e.preventDefault();
+    if (!isAuto && numericTimerRef.current) {
+      clearTimeout(numericTimerRef.current);
+      numericTimerRef.current = null;
+    }
     const cfg = customCfg || globalNumericConfig;
     try {
       setAutoSaveStatus('⏳ 전역 수치 SQLite 저장 중...');
@@ -471,12 +500,14 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
             })
           : Promise.resolve()
       ]);
+      numericTimerRef.current = null;
       setAutoSaveStatus(`✅ 수치 자동 저장됨 (${new Date().toLocaleTimeString('ko-KR', { hour12: false })})`);
       if (!isAuto) {
         alert('전역 수치 및 배율 설정이 저장되었습니다.');
         loadData();
       }
     } catch (err) {
+      numericTimerRef.current = null;
       setAutoSaveStatus('⚠️ 저장 오류');
       if (!isAuto) alert(err.message);
     }
@@ -631,6 +662,36 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
     }
   };
 
+  // 🧹 슈퍼관리자 전용: 데이터베이스 초기화 (리셋)
+  const handleResetDatabase = async (mode = 'all') => {
+    const isAll = mode === 'all';
+    const confirmMsg = isAll
+      ? '⚠️ [전체 데이터베이스 공장 초기화 확인]\n\n모든 계정(슈퍼관리자 admin 제외), 납품/퀘스트/알바/상점/원장 기록, 브랜딩 및 설정이 초기 상태로 완전히 리셋됩니다.\n(현재 admin 계정의 로그인 비밀번호는 그대로 유지되며 보유 포인트·크레딧은 0으로 초기화됩니다.)\n\n정말로 전체 초기화를 진행하시겠습니까?'
+      : '⚠️ [운영 내역 및 재화 초기화 확인]\n\n회원 계정·역할·웹훅·브랜딩 설정은 유지하고, 모든 납품/퀘스트/알바/상점/원장/시즌 기록과 전 플레이어의 보유 포인트(P)·크레딧(C)을 0으로 초기화합니다.\n\n정말로 진행하시겠습니까?';
+
+    if (!confirm(confirmMsg)) return;
+
+    try {
+      setResetLoading(true);
+      try {
+        localStorage.removeItem('mc_platform_auto_backup_v1');
+      } catch (_) {}
+      const res = await apiRequest('/admin/reset', {
+        method: 'POST',
+        body: JSON.stringify({ mode })
+      });
+      alert(res.message || '초기화가 완료되었습니다.');
+      if (refreshBranding) await refreshBranding();
+      if (refreshUser) await refreshUser();
+      await loadData(true);
+      setRoleRefreshKey(k => k + 1);
+    } catch (err) {
+      alert(`초기화 실패: ${err.message}`);
+    } finally {
+      setResetLoading(false);
+    }
+  };
+
   // 공지사항 선택 변경
   const handleSelectNoticeCategory = (cat) => {
     setSelectedNoticeCategory(cat);
@@ -661,6 +722,10 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
   // 공지사항 웹훅 및 양식 저장 (입력 시 SQLite 자동 저장 지원)
   const handleSaveNoticeWebhook = async (e, sendNow = false, customForm = null, isAuto = false) => {
     if (e && e.preventDefault) e.preventDefault();
+    if (!isAuto && noticeTimerRef.current) {
+      clearTimeout(noticeTimerRef.current);
+      noticeTimerRef.current = null;
+    }
     const payload = customForm || noticeWebhookForm;
     if (!payload.title?.trim() || !payload.content?.trim()) return;
     try {
@@ -673,6 +738,7 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
           auto_save: isAuto
         })
       });
+      noticeTimerRef.current = null;
       setNotices(prev =>
         prev.map(n => (n.category === selectedNoticeCategory ? { ...n, ...payload } : n))
       );
@@ -682,6 +748,7 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
         loadData();
       }
     } catch (err) {
+      noticeTimerRef.current = null;
       setAutoSaveStatus('⚠️ 저장 오류');
       if (!isAuto) alert(err.message);
     }
@@ -1293,7 +1360,7 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
           users={approvedUsers}
           refreshKey={roleRefreshKey}
           onChanged={() => {
-            loadData();
+            refreshRolesAndUsers();
             if (refreshUser) refreshUser();
           }}
         />
@@ -1880,6 +1947,67 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
                 >
                   {restoreLoading ? <RefreshCw size={16} className="spin" /> : <Upload size={16} />}
                   <span>{restoreLoading ? '데이터베이스 복원 적용 중...' : 'JSON 백업 파일 선택 및 불러오기'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* 7-3. 데이터베이스 초기화 (리셋 센터) */}
+          <div className="card" style={{ marginBottom: 28, border: '1px solid rgba(239, 68, 68, 0.35)' }}>
+            <div className="card-header">
+              <div className="card-title">
+                <AlertTriangle size={20} color="#ef4444" />
+                <span>데이터베이스 초기화 (리셋 센터)</span>
+              </div>
+              <span className="badge badge-rejected">⚠️ 슈퍼관리자 전용</span>
+            </div>
+
+            <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 20, lineHeight: 1.6 }}>
+              새 시즌/서버 오픈을 위해 테스트 데이터를 정리하거나 전체 데이터베이스를 초기 상태로 되돌릴 수 있습니다.
+            </p>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+              <div style={{ padding: 16, background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 15, marginBottom: 8, color: '#f59e0b' }}>
+                    <RefreshCw size={18} />
+                    <span>운영 내역 & 전 플레이어 재화 초기화</span>
+                  </div>
+                  <p style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5, marginBottom: 16 }}>
+                    가입된 플레이어 계정, 역할/권한, 웹훅 설정, 국가 브랜딩은 그대로 유지하고, 모든 납품·퀘스트·알바·상점·원장 기록과 보유 포인트(P)/크레딧(C)을 0으로 초기화합니다.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-warning"
+                  onClick={() => handleResetDatabase('activity')}
+                  disabled={resetLoading}
+                  style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
+                >
+                  <RefreshCw size={16} />
+                  <span>{resetLoading ? '초기화 진행 중...' : '운영 내역 & 재화만 0으로 초기화'}</span>
+                </button>
+              </div>
+
+              <div style={{ padding: 16, background: '#fef2f2', borderRadius: 'var(--radius-md)', border: '1px solid #fecaca', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 15, marginBottom: 8, color: '#dc2626' }}>
+                    <Trash2 size={18} />
+                    <span>전체 데이터베이스 공장 초기화 (Full Reset)</span>
+                  </div>
+                  <p style={{ fontSize: 12, color: '#7f1d1d', lineHeight: 1.5, marginBottom: 16 }}>
+                    슈퍼관리자(<code>admin</code>) 계정만 남기고 테스트 계정, 물자, 납품, 퀘스트, 알바, 상점, 원장, 설정 등 모든 테이블을 처음 설치 상태로 깨끗하게 비웁니다.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-danger"
+                  onClick={() => handleResetDatabase('all')}
+                  disabled={resetLoading}
+                  style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
+                >
+                  <Trash2 size={16} />
+                  <span>{resetLoading ? '전체 초기화 진행 중...' : '전체 데이터베이스 공장 초기화'}</span>
                 </button>
               </div>
             </div>

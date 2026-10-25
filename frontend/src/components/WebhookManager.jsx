@@ -105,8 +105,12 @@ export default function WebhookManager() {
 
   const handleToggleItem = async (item) => {
     const nextEnabled = item.enabled ? 0 : 1;
-    handleUpdateItem(item.event_key, { enabled: nextEnabled });
+    if (itemSaveTimersRef.current[item.event_key]) {
+      clearTimeout(itemSaveTimersRef.current[item.event_key]);
+    }
+    setConfigs(prev => prev.map(c => (c.event_key === item.event_key ? { ...c, enabled: nextEnabled } : c)));
     try {
+      setSavingKey(item.event_key);
       await apiRequest(`/webhooks/${item.event_key}`, {
         method: 'PUT',
         body: JSON.stringify({
@@ -114,9 +118,12 @@ export default function WebhookManager() {
           enabled: nextEnabled
         })
       });
+      setAutoSaveStatus(`✅ [${item.label || item.name}] 상태 저장됨 (${new Date().toLocaleTimeString('ko-KR', { hour12: false })})`);
     } catch (err) {
       alert(err.message);
       loadWebhooks();
+    } finally {
+      setSavingKey(null);
     }
   };
 

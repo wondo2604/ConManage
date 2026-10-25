@@ -8,7 +8,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
-  db, initDatabase, recordAssetTransaction, flushDatabase,
+  db, initDatabase, recordAssetTransaction, flushDatabase, incrementWriteCount, resetDatabase,
   PERMISSION_CATALOG, WEBHOOK_EVENT_CATALOG, sanitizePermissions, normalizeRolePositions,
   getUserAccess, migrateLegacyUserPermissions
 } from './db.js';
@@ -61,7 +61,10 @@ app.use((req, res, next) => {
   if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(req.method)) {
     res.on('finish', () => {
       if (res.statusCode >= 200 && res.statusCode < 400) {
-        flushDatabase('PASSIVE');
+        if (!req.path.startsWith('/api/auth/login') && !req.path.startsWith('/api/admin/reset') && !req.path.endsWith('/test') && !req.path.endsWith('/test-webhook')) {
+          incrementWriteCount();
+        }
+        flushDatabase('TRUNCATE');
       }
     });
   }
@@ -470,11 +473,6 @@ app.put('/api/roles/:id', authenticateToken, (req, res) => {
   let perms = role.permissions;
   if (req.body.permissions !== undefined) {
     perms = sanitizePermissions(req.body.permissions);
-    // 역할 이름을 바꿨는데 권한이 비어있고 이름이 권한명과 일치하면 자동 포함
-    if (perms.length === 0 && name !== role.name) {
-      const matched = PERMISSION_CATALOG.map(p => p.key).filter(k => (name === k || name.includes(k)) && (req.user.is_admin === 1 || req.user.roleList.includes(k)));
-      if (matched.length > 0) perms = matched;
-    }
     // 바뀌는 권한(추가·제거) 모두 본인이 가진 권한이어야 함
     const changed = [...perms.filter(p => !role.permissions.includes(p)), ...role.permissions.filter(p => !perms.includes(p))];
     const forbidden = findForbiddenPermissions(req.user, changed);
@@ -1859,6 +1857,9 @@ app.put('/api/shop/orders/:id/deliver', authenticateToken, requireRole('샵 관�
 
   if (status === 'cancelled' && order.status !== 'cancelled') {
     db.prepare('UPDATE users SET points = points + ? WHERE id = ?').run(order.points_spent, order.user_id);
+    if (order.item_id) {
+      db.prepare('UPDATE shop_items SET stock = stock + 1 WHERE id = ? AND stock >= 0').run(order.item_id);
+    }
     recordAssetTransaction({
       userId: order.user_id,
       assetType: 'POINT',
@@ -1897,6 +1898,46 @@ app.put('/api/shop/orders/:id/deliver', authenticateToken, requireRole('샵 관�
   });
 
   res.json({ message: '상품 수령/지급 처리가 완료되었습니다.' });
+});
+
+app.put('/api/shop/orders/:id/cancel', authenticateToken, (req, res) => {
+  const order = db.prepare('SELECT * FROM shop_orders WHERE id = ?').get(req.params.id);
+  if (!order) return res.status(404).json({ error: '주문 내역을 찾을 수 없습니다.' });
+
+  const canManage = req.user.is_admin === 1 || req.user.roleList.includes('샵 관리') || order.user_id === req.user.id;
+  if (!canManage) return res.status(403).json({ error: '주문을 취소할 권한이 없습니다.' });
+  if (order.status !== 'pending') return res.status(400).json({ error: '대기 중인 주문만 취소할 수 있습니다.' });
+
+  const orderUser = db.prepare('SELECT username, nickname, points FROM users WHERE id = ?').get(order.user_id);
+  db.prepare('UPDATE users SET points = points + ? WHERE id = ?').run(order.points_spent, order.user_id);
+  if (order.item_id) {
+    db.prepare('UPDATE shop_items SET stock = stock + 1 WHERE id = ? AND stock >= 0').run(order.item_id);
+  }
+  db.prepare("UPDATE shop_orders SET status = 'cancelled' WHERE id = ?").run(req.params.id);
+
+  recordAssetTransaction({
+    userId: order.user_id,
+    assetType: 'POINT',
+    amount: order.points_spent,
+    category: '포인트 상점 환불',
+    description: `[상점 주문 #${order.id} 취소] '${order.item_name}' 포인트 환불`,
+    referenceType: 'shop_order',
+    referenceId: order.id,
+    actor: req.user,
+    balanceBefore: orderUser?.points || 0,
+    balanceAfter: (orderUser?.points || 0) + order.points_spent
+  });
+
+  sendDiscordWebhook('shop_delivery', {
+    order_id: order.id,
+    user_name: orderUser ? (orderUser.nickname || orderUser.username) : `#${order.user_id}`,
+    item_name: order.item_name,
+    points_spent: order.points_spent,
+    status: 'cancelled',
+    reviewer_name: `${req.user.nickname || req.user.username} (@${req.user.username})`
+  });
+
+  res.json({ message: '주문이 취소되었으며 포인트가 환불되었습니다.' });
 });
 
 // --- 단기 알바 ---
@@ -3167,15 +3208,15 @@ app.post('/api/settings', authenticateToken, (req, res) => {
 
   if (settings && typeof settings === 'object') {
     for (const [k, v] of Object.entries(settings)) {
-      if (['system_title', 'nation_name', 'server_logo_text'].includes(k) && req.user.username !== 'admin') continue;
+      if (['system_title', 'nation_name', 'server_logo_text'].includes(k) && req.user.is_admin !== 1 && req.user.username !== 'admin') continue;
       upsert.run(k, String(v ?? ''));
     }
     return res.json({ message: '시스템 세부 수치 및 정책 설정이 일괄 저장되었습니다.' });
   }
 
   if (key) {
-    if (['system_title', 'nation_name', 'server_logo_text'].includes(key) && req.user.username !== 'admin') {
-      return res.status(403).json({ error: '국가 및 시스템 이름은 최초 admin 계정에서만 수정할 수 있습니다.' });
+    if (['system_title', 'nation_name', 'server_logo_text'].includes(key) && req.user.is_admin !== 1 && req.user.username !== 'admin') {
+      return res.status(403).json({ error: '국가 및 시스템 이름은 슈퍼관리자 계정에서만 수정할 수 있습니다.' });
     }
     upsert.run(key, String(value ?? ''));
   }
@@ -3189,7 +3230,7 @@ app.post('/api/settings/test-webhook', authenticateToken, requireAdmin, async (r
       description: '웹훅 연동이 정상적으로 작동합니다!',
       category: '시스템 테스트',
       start_date: new Date().toISOString().split('T')[0]
-    });
+    }, { isTest: true });
     res.json({ message: '웹훅 테스트 발송을 완료했습니다.' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -3221,28 +3262,28 @@ app.put('/api/webhooks', authenticateToken, requireAdmin, (req, res) => {
 
     if (Array.isArray(configs)) {
       const upsertStmt = db.prepare(`
-        INSERT INTO webhook_configs (event_key, category, label, description, enabled, webhook_url, mention_type, custom_color, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        INSERT INTO webhook_configs (event_key, enabled, webhook_url, mention_type, custom_mention, embed_color, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
         ON CONFLICT(event_key) DO UPDATE SET
           enabled = excluded.enabled,
           webhook_url = excluded.webhook_url,
           mention_type = excluded.mention_type,
-          custom_color = excluded.custom_color,
+          custom_mention = excluded.custom_mention,
+          embed_color = excluded.embed_color,
           updated_at = CURRENT_TIMESTAMP
       `);
 
       for (const item of configs) {
         if (!item || !item.event_key) continue;
         const meta = WEBHOOK_EVENT_CATALOG.find(c => c.event_key === item.event_key);
+        const colorVal = String(item.custom_color || item.embed_color || meta?.default_color || '#3b82f6').trim();
         upsertStmt.run(
           item.event_key,
-          item.category || meta?.category || '기타',
-          item.label || meta?.label || item.event_key,
-          item.description || meta?.description || '',
           item.enabled ? 1 : 0,
           String(item.webhook_url || '').trim(),
           String(item.mention_type || 'none').trim(),
-          String(item.custom_color || '').trim()
+          String(item.custom_mention || '').trim(),
+          colorVal
         );
       }
     }
@@ -3253,40 +3294,45 @@ app.put('/api/webhooks', authenticateToken, requireAdmin, (req, res) => {
       configs: getAllWebhookConfigs()
     });
   } catch (err) {
-    db.exec('ROLLBACK;');
+    try { db.exec('ROLLBACK;'); } catch (_) {}
     res.status(500).json({ error: `웹훅 설정 저장 실패: ${err.message}` });
   }
 });
 
 app.put('/api/webhooks/:eventKey', authenticateToken, requireAdmin, (req, res) => {
   const { eventKey } = req.params;
-  const { enabled, webhook_url, mention_type, custom_color } = req.body || {};
+  const { enabled, webhook_url, mention_type, custom_mention, custom_color, embed_color } = req.body || {};
   const meta = WEBHOOK_EVENT_CATALOG.find(c => c.event_key === eventKey);
   if (!meta) return res.status(404).json({ error: '존재하지 않는 웹훅 이벤트 키입니다.' });
 
   const existing = db.prepare('SELECT * FROM webhook_configs WHERE event_key = ?').get(eventKey);
+  const nextColor = custom_color !== undefined
+    ? (String(custom_color).trim() || meta.default_color || '#3b82f6')
+    : (embed_color !== undefined
+      ? (String(embed_color).trim() || meta.default_color || '#3b82f6')
+      : (existing ? existing.embed_color : (meta.default_color || '#3b82f6')));
+
   db.prepare(`
-    INSERT INTO webhook_configs (event_key, category, label, description, enabled, webhook_url, mention_type, custom_color, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    INSERT INTO webhook_configs (event_key, enabled, webhook_url, mention_type, custom_mention, embed_color, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
     ON CONFLICT(event_key) DO UPDATE SET
       enabled = excluded.enabled,
       webhook_url = excluded.webhook_url,
       mention_type = excluded.mention_type,
-      custom_color = excluded.custom_color,
+      custom_mention = excluded.custom_mention,
+      embed_color = excluded.embed_color,
       updated_at = CURRENT_TIMESTAMP
   `).run(
     eventKey,
-    meta.category,
-    meta.label,
-    meta.description,
     enabled !== undefined ? (enabled ? 1 : 0) : (existing ? existing.enabled : (meta.default_enabled ? 1 : 0)),
     webhook_url !== undefined ? String(webhook_url).trim() : (existing ? existing.webhook_url : ''),
     mention_type !== undefined ? String(mention_type).trim() : (existing ? existing.mention_type : 'none'),
-    custom_color !== undefined ? String(custom_color).trim() : (existing ? existing.custom_color : '')
+    custom_mention !== undefined ? String(custom_mention).trim() : (existing ? existing.custom_mention : ''),
+    nextColor
   );
 
   res.json({
-    message: `[${meta.label}] 웹훅 설정이 업데이트되었습니다.`,
+    message: `[${meta.name}] 웹훅 설정이 업데이트되었습니다.`,
     configs: getAllWebhookConfigs()
   });
 });
@@ -3297,11 +3343,15 @@ app.post('/api/webhooks/:eventKey/test', authenticateToken, requireAdmin, async 
   const meta = WEBHOOK_EVENT_CATALOG.find(c => c.event_key === eventKey);
   if (!meta) return res.status(404).json({ error: '존재하지 않는 웹훅 이벤트입니다.' });
 
-  const result = await sendTestEventWebhook(eventKey, custom_url);
-  if (!result.ok) {
-    return res.status(400).json({ error: result.error || '웹훅 테스트 발송에 실패했습니다.' });
+  try {
+    const result = await sendTestEventWebhook(eventKey, custom_url ? { webhook_url: custom_url } : {}, req.user);
+    if (!result || !result.success) {
+      return res.status(400).json({ error: result?.error || '웹훅 테스트 발송에 실패했습니다.' });
+    }
+    res.json({ message: `[${meta.name}] 테스트 웹훅이 디스코드 채널로 발송되었습니다!` });
+  } catch (err) {
+    res.status(400).json({ error: err.message || '웹훅 테스트 발송에 실패했습니다.' });
   }
-  res.json({ message: `[${meta.label}] 테스트 웹훅이 디스코드 채널로 발송되었습니다!` });
 });
 
 // --- 슈퍼관리자 전용 데이터 백업 및 복원 (JSON) ---
@@ -3463,33 +3513,53 @@ app.post('/api/admin/import', authenticateToken, requireAdmin, upload.single('ba
   }
 });
 
-// 국가 및 시스템 브랜딩 (공개 조회)
+// 3. 데이터베이스 초기화 (전체 리셋 또는 운영 내역·재화 리셋)
+app.post('/api/admin/reset', authenticateToken, requireAdmin, (req, res) => {
+  try {
+    const mode = req.body?.mode === 'activity' ? 'activity' : 'all';
+    const resetAdminPassword = Boolean(req.body?.resetAdminPassword);
+    const result = resetDatabase(mode, { resetAdminPassword, uploadDir });
+    res.json({
+      message: mode === 'activity'
+        ? '모든 운영 내역(납품·퀘스트·알바·상점·원장·시즌)과 전 플레이어 보유 재화(P/C)가 0으로 초기화되었습니다.'
+        : '데이터베이스가 깨끗한 초기 상태(공장 초기화)로 리셋되었습니다.',
+      ...result
+    });
+  } catch (err) {
+    console.error('[Reset Error]', err);
+    res.status(500).json({ error: `데이터 초기화 중 오류가 발생했습니다: ${err.message}` });
+  }
+});
+
+// 국가 및 시스템 브랜딩 (공개 조회 + DB 동기화 메타데이터 포함)
 app.get('/api/settings/branding', (req, res) => {
-  const rows = db.prepare("SELECT key, value FROM settings WHERE key IN ('system_title', 'nation_name', 'server_logo_text')").all();
+  const rows = db.prepare("SELECT key, value FROM settings WHERE key IN ('system_title', 'nation_name', 'server_logo_text', 'db_epoch', 'write_count')").all();
   const branding = {
     system_title: 'FEDERATION',
     nation_name: '마인크래프트 전쟁 관리',
-    server_logo_text: 'M'
+    server_logo_text: 'M',
+    db_epoch: '1',
+    write_count: '0'
   };
   rows.forEach(r => { branding[r.key] = r.value; });
   res.json(branding);
 });
 
-// 국가 및 시스템 브랜딩 수정 (오직 최초 admin 계정에서만 수정 가능!)
+// 국가 및 시스템 브랜딩 수정 (슈퍼관리자 계정에서 수정 가능)
 app.put('/api/settings/branding', authenticateToken, (req, res) => {
-  if (req.user.username !== 'admin') {
-    return res.status(403).json({ error: '국가 및 시스템 이름은 최초 admin 계정에서만 수정할 수 있습니다.' });
+  if (req.user.is_admin !== 1 && req.user.username !== 'admin') {
+    return res.status(403).json({ error: '국가 및 시스템 이름은 슈퍼관리자 계정에서만 수정할 수 있습니다.' });
   }
 
-  const { system_title, nation_name, server_logo_text } = req.body;
-  if (system_title) {
-    db.prepare("INSERT INTO settings (key, value) VALUES ('system_title', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(system_title.trim());
+  const { system_title, nation_name, server_logo_text } = req.body || {};
+  if (system_title !== undefined && String(system_title).trim()) {
+    db.prepare("INSERT INTO settings (key, value) VALUES ('system_title', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(system_title).trim());
   }
-  if (nation_name) {
-    db.prepare("INSERT INTO settings (key, value) VALUES ('nation_name', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(nation_name.trim());
+  if (nation_name !== undefined && String(nation_name).trim()) {
+    db.prepare("INSERT INTO settings (key, value) VALUES ('nation_name', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(nation_name).trim());
   }
-  if (server_logo_text) {
-    db.prepare("INSERT INTO settings (key, value) VALUES ('server_logo_text', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(server_logo_text.trim());
+  if (server_logo_text !== undefined && String(server_logo_text).trim()) {
+    db.prepare("INSERT INTO settings (key, value) VALUES ('server_logo_text', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(server_logo_text).trim());
   }
 
   res.json({ message: '국가 및 시스템 이름이 성공적으로 변경되었습니다.' });
@@ -3514,11 +3584,11 @@ if (clientDist) {
 app.listen(PORT, () => {
   console.log(`[Backend] Minecraft Platform Server running on port ${PORT}`);
 
-  // Render 등 무료 클라우드 서버 15분 절전(슬립) 방지를 위한 자체 Keep-Alive 타이머 (10분 주기)
-  const selfUrl = process.env.RENDER_EXTERNAL_URL || process.env.SELF_URL;
+  // Render 등 무료 클라우드 서버 15분 절전(슬립) 방지를 위한 자체 Keep-Alive 타이머 (4분 주기)
+  const selfUrl = process.env.RENDER_EXTERNAL_URL || process.env.SELF_URL || (process.env.RENDER ? 'https://conmanage.onrender.com' : '');
   if (selfUrl) {
     setInterval(() => {
       fetch(`${selfUrl.replace(/\/$/, '')}/api/health`).catch(() => {});
-    }, 10 * 60 * 1000);
+    }, 4 * 60 * 1000);
   }
 });
