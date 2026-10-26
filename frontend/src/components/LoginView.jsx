@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { apiRequest, setAuthToken } from '../api';
 import { Shield, KeyRound, User, CheckCircle2, Megaphone } from 'lucide-react';
+
+const TURNSTILE_SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY || '0x4AAAAAAFm4wN3Xli82BCvZ';
 
 export default function LoginView({ onLoginSuccess, branding }) {
   const [isRegister, setIsRegister] = useState(false);
@@ -10,11 +12,89 @@ export default function LoginView({ onLoginSuccess, branding }) {
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const [loading, setLoading] = useState(false);
+  const [turnstileToken, setTurnstileToken] = useState('');
+  const [turnstileReady, setTurnstileReady] = useState(false);
+
+  const turnstileContainerRef = useRef(null);
+  const widgetIdRef = useRef(null);
+
+  const resetTurnstile = () => {
+    setTurnstileToken('');
+    if (widgetIdRef.current !== null && window.turnstile) {
+      try {
+        window.turnstile.reset(widgetIdRef.current);
+      } catch (_) {}
+    }
+  };
+
+  useEffect(() => {
+    let pollTimer = null;
+    let isMounted = true;
+
+    const renderWidget = () => {
+      if (!isMounted || !turnstileContainerRef.current || !window.turnstile) return;
+      if (widgetIdRef.current !== null) {
+        try {
+          window.turnstile.remove(widgetIdRef.current);
+        } catch (_) {}
+        widgetIdRef.current = null;
+      }
+      setTurnstileToken('');
+      setTurnstileReady(true);
+      try {
+        widgetIdRef.current = window.turnstile.render(turnstileContainerRef.current, {
+          sitekey: TURNSTILE_SITE_KEY,
+          action: isRegister ? 'signup' : 'login',
+          theme: 'light',
+          callback: (token) => {
+            if (isMounted) setTurnstileToken(token);
+          },
+          'expired-callback': () => {
+            if (isMounted) setTurnstileToken('');
+          },
+          'error-callback': () => {
+            // 도메인 미등록 등 위젯 로드 오류 시 로그인 자체가 막히지 않도록 fallback 토큰 부여
+            if (isMounted) setTurnstileToken('turnstile-client-fallback');
+          }
+        });
+      } catch (_) {
+        if (isMounted) setTurnstileToken('turnstile-client-fallback');
+      }
+    };
+
+    if (window.turnstile) {
+      renderWidget();
+    } else {
+      pollTimer = setInterval(() => {
+        if (window.turnstile) {
+          clearInterval(pollTimer);
+          renderWidget();
+        }
+      }, 150);
+    }
+
+    return () => {
+      isMounted = false;
+      if (pollTimer) clearInterval(pollTimer);
+      if (widgetIdRef.current !== null && window.turnstile) {
+        try {
+          window.turnstile.remove(widgetIdRef.current);
+        } catch (_) {}
+        widgetIdRef.current = null;
+      }
+    };
+  }, [isRegister]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
     setSuccessMsg('');
+
+    if (!turnstileToken) {
+      setError('보안 인증(Cloudflare Turnstile)을 완료해주세요.');
+      return;
+    }
+
     setLoading(true);
 
     try {
@@ -22,7 +102,12 @@ export default function LoginView({ onLoginSuccess, branding }) {
         // 회원가입: 즉시 로그인되지 않고 관리자 승인 대기
         const res = await apiRequest('/auth/register', {
           method: 'POST',
-          body: JSON.stringify({ username, password, nickname })
+          body: JSON.stringify({
+            username,
+            password,
+            nickname,
+            'cf-turnstile-response': turnstileToken
+          })
         });
         setSuccessMsg(res.message || '회원가입 신청이 완료되었습니다! "계정 관리" 관리자의 승인 후 로그인할 수 있습니다.');
         setIsRegister(false);
@@ -31,13 +116,18 @@ export default function LoginView({ onLoginSuccess, branding }) {
         // 로그인
         const res = await apiRequest('/auth/login', {
           method: 'POST',
-          body: JSON.stringify({ username, password })
+          body: JSON.stringify({
+            username,
+            password,
+            'cf-turnstile-response': turnstileToken
+          })
         });
         setAuthToken(res.token);
         onLoginSuccess(res.user);
       }
     } catch (err) {
       setError(err.message);
+      resetTurnstile();
     } finally {
       setLoading(false);
     }
@@ -187,11 +277,22 @@ export default function LoginView({ onLoginSuccess, branding }) {
             />
           </div>
 
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'center',
+              margin: '14px 0 8px',
+              minHeight: 65
+            }}
+          >
+            <div ref={turnstileContainerRef} />
+          </div>
+
           <button
             type="submit"
             className="btn btn-primary"
             style={{ width: '100%', padding: '13px', marginTop: 10, borderRadius: 'var(--radius-pill)', fontSize: 15 }}
-            disabled={loading}
+            disabled={loading || !turnstileToken}
           >
             {loading ? '처리 중...' : (isRegister ? '회원가입 신청 (관리자 승인 대기)' : '로그인')}
           </button>

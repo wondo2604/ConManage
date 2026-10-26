@@ -666,6 +666,54 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
     }
   };
 
+  // 🔄 브라우저 로컬 자동 스냅샷(localStorage) 수동 복원
+  const getBrowserAutoSnapshots = () => {
+    const list = [];
+    for (const [key, label] of [
+      ['mc_platform_auto_backup_v1', '최신 브라우저 자동 스냅샷'],
+      ['mc_platform_auto_backup_prev_v1', '이전 보존 브라우저 스냅샷']
+    ]) {
+      try {
+        const raw = localStorage.getItem(key);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed?.payload?.data) {
+            list.push({ key, label, ...parsed });
+          }
+        }
+      } catch (_) {}
+    }
+    return list;
+  };
+
+  const handleRestoreBrowserSnapshot = async (snap) => {
+    if (!snap?.payload) return;
+    const userCnt = snap.payload?.data?.users?.length || 0;
+    const supplyCnt = snap.payload?.data?.supplies?.length || 0;
+    const shopCnt = snap.payload?.data?.shop_items?.length || 0;
+    if (!confirm(
+      `[브라우저 자동 스냅샷 복원 확인]\n\n` +
+      `저장 시각: ${snap.saved_at ? new Date(snap.saved_at).toLocaleString('ko-KR') : '-'}\n` +
+      `기록 횟수(write_count): ${snap.write_count || 0}회\n` +
+      `포함 데이터: 계정 ${userCnt}명, 납품물자 ${supplyCnt}종, 상점아이템 ${shopCnt}종\n\n` +
+      `이 스냅샷으로 서버 데이터베이스를 즉시 복원하시겠습니까?`
+    )) return;
+
+    try {
+      setRestoreLoading(true);
+      await apiRequest('/admin/import', {
+        method: 'POST',
+        body: JSON.stringify(snap.payload)
+      });
+      alert('🎉 브라우저 자동 스냅샷으로부터 데이터베이스 복원이 완료되었습니다!');
+      window.location.reload();
+    } catch (err) {
+      alert(`스냅샷 복원 실패: ${err.message}`);
+    } finally {
+      setRestoreLoading(false);
+    }
+  };
+
   // 🧹 슈퍼관리자 전용: 데이터베이스 초기화 (리셋)
   const handleResetDatabase = async (mode = 'all') => {
     const isAll = mode === 'all';
@@ -2037,6 +2085,36 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
                 </button>
               </div>
             </div>
+
+            {/* 브라우저 로컬 자동 스냅샷 즉시 복구 섹션 */}
+            {(() => {
+              const snaps = getBrowserAutoSnapshots();
+              if (snaps.length === 0) return null;
+              return (
+                <div style={{ marginTop: 16, padding: 14, background: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
+                  <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8, color: 'var(--text-main)' }}>
+                    💾 이 브라우저에 자동 저장된 로컬 스냅샷 ({snaps.length}개)
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {snaps.map((s) => (
+                      <div key={s.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', fontSize: 12, background: '#ffffff', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border-color)' }}>
+                        <div>
+                          <strong>{s.label}</strong> · 저장 시각: {s.saved_at ? new Date(s.saved_at).toLocaleString('ko-KR') : '-'} · 변경 카운트: <strong>{s.write_count}회</strong> (계정 {s.payload?.data?.users?.length || 0}명 / 납품물자 {s.payload?.data?.supplies?.length || 0}종 / 상점 {s.payload?.data?.shop_items?.length || 0}종)
+                        </div>
+                        <button
+                          type="button"
+                          className="btn btn-primary btn-sm"
+                          disabled={restoreLoading}
+                          onClick={() => handleRestoreBrowserSnapshot(s)}
+                        >
+                          이 스냅샷으로 즉시 복원
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
 
           {/* 7-3. 데이터베이스 초기화 (리셋 센터) */}

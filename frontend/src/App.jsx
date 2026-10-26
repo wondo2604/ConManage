@@ -78,8 +78,28 @@ export default function App() {
   };
 
   useEffect(() => {
-    refreshBranding();
-    refreshUser();
+    (async () => {
+      const latestBranding = await refreshBranding();
+      // 서버가 컨테이너 재배포/재시작으로 초기 상태(write_count === '0')인 경우 로그인 전이라도 로컬 스냅샷 즉시 복구
+      if (latestBranding && Number(latestBranding.write_count || 0) === 0) {
+        try {
+          const raw = localStorage.getItem('mc_platform_auto_backup_v1') || localStorage.getItem('mc_platform_auto_backup_prev_v1');
+          const saved = raw ? JSON.parse(raw) : null;
+          if (saved?.payload && Number(saved.write_count || 0) > 0) {
+            autoRestoreInProgressRef.current = true;
+            await apiRequest('/admin/auto-restore', {
+              method: 'POST',
+              body: JSON.stringify(saved.payload)
+            });
+            await refreshBranding();
+            autoRestoreInProgressRef.current = false;
+          }
+        } catch (_) {
+          autoRestoreInProgressRef.current = false;
+        }
+      }
+      await refreshUser();
+    })();
 
     // 무료 클라우드 서버 절전(슬립) 방지를 위한 주기적 Keep-Alive 핑 (4분 간격)
     const keepAliveTimer = setInterval(() => {
@@ -88,20 +108,74 @@ export default function App() {
     return () => clearInterval(keepAliveTimer);
   }, []);
 
-  // 무료 서버 컨테이너 재시작 시 브라우저 로컬 스냅샷 자동 동기화 및 복구 (슈퍼관리자 전용)
+  // 무료 서버 컨테이너 재시작·재배포 시 브라우저 로컬 스냅샷 자동 동기화 및 복구 (슈퍼관리자 전용)
   useEffect(() => {
     if (!user?.is_admin) return;
+
+    const getSavedSnapshot = () => {
+      try {
+        const raw = localStorage.getItem('mc_platform_auto_backup_v1');
+        return raw ? JSON.parse(raw) : null;
+      } catch (_) {
+        return null;
+      }
+    };
+
+    const tryAutoRestoreIfServerReset = async () => {
+      if (autoRestoreInProgressRef.current) return false;
+      try {
+        const saved = getSavedSnapshot();
+        if (!saved?.payload || !(Number(saved.write_count) > 0)) return false;
+
+        const latestBranding = await refreshBranding();
+        if (!latestBranding) return false;
+        const serverEpoch = String(latestBranding.db_epoch || '1');
+        const serverWrites = Number(latestBranding.write_count || 0);
+        const savedEpoch = String(saved.db_epoch || '1');
+        const savedWrites = Number(saved.write_count || 0);
+
+        // 1) 서버가 재배포/재시작되어 write_count === 0 초기 상태로 돌아간 경우 (epoch가 같거나 로컬 스냅샷 epoch가 더 최신인 경우)
+        // 2) 또는 동일 epoch 내에서 서버 write_count가 로컬 스냅샷보다 작아진 경우(백그라운드 재배포 직후 1~2회 쓰기 발생)
+        const isFreshContainerReset = serverWrites === 0 && Number(savedEpoch) >= Number(serverEpoch);
+        const isSameEpochRollback = savedEpoch === serverEpoch && serverWrites < savedWrites;
+
+        if (isFreshContainerReset || isSameEpochRollback) {
+          autoRestoreInProgressRef.current = true;
+          await apiRequest('/admin/import', {
+            method: 'POST',
+            body: JSON.stringify(saved.payload)
+          });
+          await refreshBranding();
+          await refreshUser();
+          autoRestoreInProgressRef.current = false;
+          return true;
+        }
+      } catch (_) {
+        autoRestoreInProgressRef.current = false;
+      }
+      return false;
+    };
 
     const saveSnapshotToLocal = async () => {
       if (autoRestoreInProgressRef.current) return;
       try {
+        // 저장 전 혹시 백그라운드에서 컨테이너가 초기화된 상태인지 먼저 점검
+        const restored = await tryAutoRestoreIfServerReset();
+        if (restored) return;
+
         const payload = await apiRequest('/admin/export');
         const settingsRows = payload?.data?.settings || [];
         const epochRow = settingsRows.find(r => r.key === 'db_epoch');
         const writeRow = settingsRows.find(r => r.key === 'write_count');
-        const db_epoch = epochRow?.value || '1';
+        const db_epoch = String(epochRow?.value || '1');
         const write_count = Number(writeRow?.value || 0);
+
         if (write_count > 0) {
+          const prev = getSavedSnapshot();
+          // 만약 기존 스냅샷의 write_count가 현재보다 더 크다면 안전을 위해 이전 백업 슬롯에 보존
+          if (prev?.payload && Number(prev.write_count || 0) > write_count) {
+            localStorage.setItem('mc_platform_auto_backup_prev_v1', JSON.stringify(prev));
+          }
           localStorage.setItem('mc_platform_auto_backup_v1', JSON.stringify({
             db_epoch,
             write_count,
@@ -117,36 +191,18 @@ export default function App() {
       autoBackupTimerRef.current = setTimeout(saveSnapshotToLocal, 1200);
     };
 
+    const handleWindowFocus = () => {
+      tryAutoRestoreIfServerReset();
+    };
+
     window.addEventListener('mc-db-mutated', handleDbMutated);
+    window.addEventListener('focus', handleWindowFocus);
 
-    // 서버가 컨테이너 재시작으로 인해 초기 상태(write_count === 0)로 돌아간 경우 자동 복원
-    (async () => {
-      try {
-        const raw = localStorage.getItem('mc_platform_auto_backup_v1');
-        if (!raw) return;
-        const saved = JSON.parse(raw);
-        const latestBranding = await refreshBranding();
-        if (!latestBranding) return;
-        const serverEpoch = String(latestBranding.db_epoch || '1');
-        const serverWrites = Number(latestBranding.write_count || 0);
-
-        if (saved?.payload && String(saved.db_epoch) === serverEpoch && Number(saved.write_count) > 0 && serverWrites === 0) {
-          autoRestoreInProgressRef.current = true;
-          await apiRequest('/admin/import', {
-            method: 'POST',
-            body: JSON.stringify(saved.payload)
-          });
-          await refreshBranding();
-          await refreshUser();
-          autoRestoreInProgressRef.current = false;
-        }
-      } catch (_) {
-        autoRestoreInProgressRef.current = false;
-      }
-    })();
+    tryAutoRestoreIfServerReset();
 
     return () => {
       window.removeEventListener('mc-db-mutated', handleDbMutated);
+      window.removeEventListener('focus', handleWindowFocus);
       if (autoBackupTimerRef.current) clearTimeout(autoBackupTimerRef.current);
     };
   }, [user?.is_admin]);
