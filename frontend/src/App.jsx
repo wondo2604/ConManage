@@ -37,6 +37,8 @@ export default function App() {
     system_title: 'FEDERATION',
     nation_name: '마인크래프트 전쟁 관리',
     server_logo_text: 'M',
+    login_subtitle: '',
+    login_message: '',
     db_epoch: '1',
     write_count: '0'
   });

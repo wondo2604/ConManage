@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { apiRequest, setAuthToken } from '../api';
-import { Shield, KeyRound, User, CheckCircle2 } from 'lucide-react';
+import { Shield, KeyRound, User, CheckCircle2, Megaphone } from 'lucide-react';
 
 export default function LoginView({ onLoginSuccess, branding }) {
   const [isRegister, setIsRegister] = useState(false);
@@ -80,10 +80,36 @@ export default function LoginView({ onLoginSuccess, branding }) {
           <h1 style={{ fontSize: 22, fontWeight: 800, letterSpacing: -0.5, color: 'var(--text-main)' }}>
             {branding?.nation_name || '마인크래프트 국가전쟁 관리 플랫폼'}
           </h1>
-          <p style={{ color: 'var(--text-muted)', fontSize: 13, marginTop: 6, fontWeight: 500 }}>
-            {branding?.system_title || 'FEDERATION'} - 연방 국가전쟁 통합 관리 시스템
+          <p style={{ color: 'var(--text-muted)', fontSize: 13, marginTop: 6, fontWeight: 500, whiteSpace: 'pre-line' }}>
+            {branding?.login_subtitle && String(branding.login_subtitle).trim()
+              ? branding.login_subtitle
+              : `${branding?.system_title || 'FEDERATION'} - 연방 국가전쟁 통합 관리 시스템`}
           </p>
         </div>
+
+        {/* 초기 로그인 화면 설정 안내 메시지 */}
+        {branding?.login_message && String(branding.login_message).trim() && (
+          <div style={{
+            background: 'var(--bg-secondary)',
+            border: '1px solid var(--border-color)',
+            borderLeft: '4px solid var(--primary)',
+            borderRadius: 12,
+            padding: '12px 16px',
+            fontSize: 13,
+            color: 'var(--text-main)',
+            marginBottom: 20,
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 10,
+            lineHeight: 1.6,
+            whiteSpace: 'pre-line'
+          }}>
+            <Megaphone size={17} color="var(--primary)" style={{ flexShrink: 0, marginTop: 3 }} />
+            <div style={{ flex: 1, wordBreak: 'break-word' }}>
+              {branding.login_message}
+            </div>
+          </div>
+        )}
 
         {/* 성공 안내 메시지 */}
         {successMsg && (

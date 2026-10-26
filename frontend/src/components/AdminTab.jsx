@@ -69,11 +69,13 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
   const numericTimerRef = useRef(null);
   const noticeTimerRef = useRef(null);
 
-  // 브랜딩 수정 폼 (최초 admin만 가능)
+  // 브랜딩 및 초기 로그인 화면 메시지 수정 폼
   const [brandingForm, setBrandingForm] = useState({
     system_title: branding?.system_title || 'FEDERATION',
     nation_name: branding?.nation_name || '마인크래프트 전쟁 관리',
-    server_logo_text: branding?.server_logo_text || 'M'
+    server_logo_text: branding?.server_logo_text || 'M',
+    login_subtitle: branding?.login_subtitle || '',
+    login_message: branding?.login_message || ''
   });
 
   // 모달 상태
@@ -297,16 +299,18 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
       setBrandingForm({
         system_title: branding.system_title || 'FEDERATION',
         nation_name: branding.nation_name || '마인크래프트 전쟁 관리',
-        server_logo_text: branding.server_logo_text || 'M'
+        server_logo_text: branding.server_logo_text || 'M',
+        login_subtitle: branding.login_subtitle || '',
+        login_message: branding.login_message || ''
       });
     }
-  }, [branding?.system_title, branding?.nation_name, branding?.server_logo_text]);
+  }, [branding?.system_title, branding?.nation_name, branding?.server_logo_text, branding?.login_subtitle, branding?.login_message]);
 
-  // 브랜딩 저장 (슈퍼관리자 가능) - 입력 즉시 SQLite 자동 저장 지원
+  // 브랜딩 · 로그인 화면 메시지 저장 - 입력 즉시 SQLite 자동 저장 지원
   const handleSaveBranding = async (e, customData = null, isAuto = false) => {
     if (e && e.preventDefault) e.preventDefault();
-    if (!isInitialAdmin) {
-      if (!isAuto) alert('국가 및 시스템 이름은 슈퍼관리자 계정에서만 수정할 수 있습니다.');
+    if (!isInitialAdmin && !canManageNotices) {
+      if (!isAuto) alert('국가/시스템 브랜딩 및 로그인 화면 메시지 수정 권한이 없습니다.');
       return;
     }
     if (!isAuto && brandingTimerRef.current) {
@@ -315,12 +319,12 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
     }
 
     const payload = customData || brandingForm;
-    if (!payload.system_title?.trim() || !payload.nation_name?.trim() || !payload.server_logo_text?.trim()) {
+    if (isInitialAdmin && (!payload.system_title?.trim() || !payload.nation_name?.trim() || !payload.server_logo_text?.trim())) {
       return;
     }
 
     try {
-      setAutoSaveStatus('⏳ 브랜딩 SQLite 저장 중...');
+      setAutoSaveStatus('⏳ 브랜딩 · 로그인 메시지 SQLite 저장 중...');
       const res = await apiRequest('/settings/branding', {
         method: 'PUT',
         body: JSON.stringify(payload)
@@ -339,9 +343,9 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
   const updateBrandingAutoSave = (patch) => {
     const next = { ...brandingForm, ...patch };
     setBrandingForm(next);
-    if (!isInitialAdmin) return;
+    if (!isInitialAdmin && !canManageNotices) return;
     if (brandingTimerRef.current) clearTimeout(brandingTimerRef.current);
-    setAutoSaveStatus('⏳ 브랜딩 변경 감지 · 자동 저장 대기...');
+    setAutoSaveStatus('⏳ 브랜딩 · 로그인 메시지 변경 감지 · 자동 저장 대기...');
     brandingTimerRef.current = setTimeout(() => {
       handleSaveBranding(null, next, true);
     }, 600);
@@ -1800,6 +1804,58 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
               </div>
             </div>
           </form>
+
+          {/* 초기 로그인 화면 메시지 설정 (공지 관리자 / 슈퍼관리자 공통) */}
+          <div style={{ marginTop: 28, paddingTop: 24, borderTop: '1px solid var(--border-color)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 15, color: 'var(--text-main)' }}>
+                <Globe size={18} color="var(--primary)" />
+                <span>초기 로그인 화면 메시지 설정</span>
+              </div>
+              <span className="badge badge-approved">로그인 화면 실시간 반영</span>
+            </div>
+            <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 14 }}>
+              플레이어가 처음 접속하는 로그인/회원가입 화면의 부제목(슬로건)과 안내 공지 박스를 자유롭게 설정할 수 있습니다.
+            </p>
+            <form onSubmit={handleSaveBranding}>
+              <div className="form-group">
+                <label className="form-label">로그인 화면 부제목 / 슬로건 (비워두면 기본 시스템 부제목 표시 · 자동저장)</label>
+                <input
+                  type="text"
+                  className="input"
+                  placeholder={`기본값: ${brandingForm.system_title || 'FEDERATION'} - 연방 국가전쟁 통합 관리 시스템`}
+                  value={brandingForm.login_subtitle || ''}
+                  onChange={(e) => updateBrandingAutoSave({ login_subtitle: e.target.value })}
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">초기 로그인 화면 안내/환영 메시지 (비워두면 메시지 박스 숨김 · 줄바꿈 지원 · 자동저장)</label>
+                <textarea
+                  className="textarea"
+                  rows="3"
+                  placeholder="예: 📢 환영합니다! 신규 대원은 [새로운 플레이어 등록] 버튼을 눌러 인게임 닉네임으로 가입을 신청해 주세요.&#10;가입 신청 후 디스코드 인증 채널에 알려주시면 빠르게 승인됩니다."
+                  value={brandingForm.login_message || ''}
+                  onChange={(e) => updateBrandingAutoSave({ login_message: e.target.value })}
+                />
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                {(brandingForm.login_subtitle || brandingForm.login_message) && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => updateBrandingAutoSave({ login_subtitle: '', login_message: '' })}
+                  >
+                    초기화 (비우기)
+                  </button>
+                )}
+                <button type="submit" className="btn btn-primary">
+                  로그인 화면 메시지 저장
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
 
@@ -1819,12 +1875,12 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
               <div className="card-header">
                 <div className="card-title">
                   <Globe size={20} color="var(--primary)" />
-                  <span>국가 및 시스템 이름 설정 (최초 admin 전용)</span>
+                  <span>국가 및 시스템 이름 · 초기 로그인 화면 메시지 설정 (최초 admin 전용)</span>
                 </div>
                 <span className="badge badge-approved">👑 최초 admin 권한 인증됨</span>
               </div>
               <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 16, lineHeight: 1.5 }}>
-                웹사이트 전역(사이드바, 헤더, 로그인 화면)에 노출되는 국가 이름, 시스템 타이틀, 로고 심볼을 오직 최초 admin 계정에서만 변경할 수 있습니다.
+                웹사이트 전역(사이드바, 헤더, 로그인 화면)에 노출되는 국가 이름, 시스템 타이틀, 로고 심볼 및 초기 로그인 화면의 안내 메시지를 설정할 수 있습니다.
               </p>
 
               <form onSubmit={handleSaveBranding}>
@@ -1867,9 +1923,40 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
                   </div>
                 </div>
 
-                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
+                <div className="form-group" style={{ marginTop: 4 }}>
+                  <label className="form-label">로그인 화면 부제목 / 슬로건 (비워두면 기본 시스템 부제목 표시 · 자동저장)</label>
+                  <input
+                    type="text"
+                    className="input"
+                    placeholder={`기본값: ${brandingForm.system_title || 'FEDERATION'} - 연방 국가전쟁 통합 관리 시스템`}
+                    value={brandingForm.login_subtitle || ''}
+                    onChange={(e) => updateBrandingAutoSave({ login_subtitle: e.target.value })}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">초기 로그인 화면 안내/환영 메시지 (비워두면 메시지 박스 숨김 · 줄바꿈 지원 · 자동저장)</label>
+                  <textarea
+                    className="textarea"
+                    rows="3"
+                    placeholder="예: 📢 환영합니다! 신규 대원은 [새로운 플레이어 등록] 버튼을 눌러 인게임 닉네임으로 가입을 신청해 주세요.&#10;가입 신청 후 디스코드 인증 채널에 알려주시면 빠르게 승인됩니다."
+                    value={brandingForm.login_message || ''}
+                    onChange={(e) => updateBrandingAutoSave({ login_message: e.target.value })}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
+                  {(brandingForm.login_subtitle || brandingForm.login_message) && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => updateBrandingAutoSave({ login_subtitle: '', login_message: '' })}
+                    >
+                      로그인 메시지 초기화
+                    </button>
+                  )}
                   <button type="submit" className="btn btn-primary">
-                    국가 & 시스템 이름 저장 적용
+                    국가 브랜딩 & 로그인 메시지 저장 적용
                   </button>
                 </div>
               </form>

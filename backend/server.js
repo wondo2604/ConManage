@@ -3753,11 +3753,13 @@ app.post('/api/admin/reset', authenticateToken, requireAdmin, (req, res) => {
 
 // 국가 및 시스템 브랜딩 (공개 조회 + DB 동기화 메타데이터 포함)
 app.get('/api/settings/branding', (req, res) => {
-  const rows = db.prepare("SELECT key, value FROM settings WHERE key IN ('system_title', 'nation_name', 'server_logo_text', 'db_epoch', 'write_count')").all();
+  const rows = db.prepare("SELECT key, value FROM settings WHERE key IN ('system_title', 'nation_name', 'server_logo_text', 'login_subtitle', 'login_message', 'db_epoch', 'write_count')").all();
   const branding = {
     system_title: 'FEDERATION',
     nation_name: '마인크래프트 전쟁 관리',
     server_logo_text: 'M',
+    login_subtitle: '',
+    login_message: '',
     db_epoch: '1',
     write_count: '0'
   };
@@ -3765,24 +3767,34 @@ app.get('/api/settings/branding', (req, res) => {
   res.json(branding);
 });
 
-// 국가 및 시스템 브랜딩 수정 (슈퍼관리자 계정에서 수정 가능)
+// 국가 및 시스템 브랜딩 · 초기 로그인 화면 메시지 수정
 app.put('/api/settings/branding', authenticateToken, (req, res) => {
-  if (req.user.is_admin !== 1 && req.user.username !== 'admin') {
-    return res.status(403).json({ error: '국가 및 시스템 이름은 슈퍼관리자 계정에서만 수정할 수 있습니다.' });
+  const isSuperAdmin = req.user.is_admin === 1 || req.user.username === 'admin';
+  const canManageNotice = isSuperAdmin || (Array.isArray(req.user.roleList) && req.user.roleList.includes('공지 관리'));
+  if (!canManageNotice) {
+    return res.status(403).json({ error: '국가/시스템 브랜딩 및 로그인 화면 메시지 수정 권한이 없습니다.' });
   }
 
-  const { system_title, nation_name, server_logo_text } = req.body || {};
-  if (system_title !== undefined && String(system_title).trim()) {
-    db.prepare("INSERT INTO settings (key, value) VALUES ('system_title', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(system_title).trim());
+  const { system_title, nation_name, server_logo_text, login_subtitle, login_message } = req.body || {};
+  if (isSuperAdmin) {
+    if (system_title !== undefined && String(system_title).trim()) {
+      db.prepare("INSERT INTO settings (key, value) VALUES ('system_title', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(system_title).trim());
+    }
+    if (nation_name !== undefined && String(nation_name).trim()) {
+      db.prepare("INSERT INTO settings (key, value) VALUES ('nation_name', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(nation_name).trim());
+    }
+    if (server_logo_text !== undefined && String(server_logo_text).trim()) {
+      db.prepare("INSERT INTO settings (key, value) VALUES ('server_logo_text', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(server_logo_text).trim());
+    }
   }
-  if (nation_name !== undefined && String(nation_name).trim()) {
-    db.prepare("INSERT INTO settings (key, value) VALUES ('nation_name', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(nation_name).trim());
+  if (login_subtitle !== undefined) {
+    db.prepare("INSERT INTO settings (key, value) VALUES ('login_subtitle', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(login_subtitle).trim());
   }
-  if (server_logo_text !== undefined && String(server_logo_text).trim()) {
-    db.prepare("INSERT INTO settings (key, value) VALUES ('server_logo_text', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(server_logo_text).trim());
+  if (login_message !== undefined) {
+    db.prepare("INSERT INTO settings (key, value) VALUES ('login_message', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(login_message));
   }
 
-  res.json({ message: '국가 및 시스템 이름이 성공적으로 변경되었습니다.' });
+  res.json({ message: '시스템 브랜딩 및 초기 로그인 화면 메시지가 성공적으로 저장되었습니다.' });
 });
 
 // 프론트엔드 정적 파일 서빙 지원 (배포 패키지용 public 또는 ../frontend/dist)

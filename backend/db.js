@@ -683,6 +683,8 @@ export function initDatabase() {
     system_title: 'FEDERATION',
     nation_name: '마인크래프트 전쟁 관리',
     server_logo_text: 'M',
+    login_subtitle: '',
+    login_message: '',
     point_multiplier: '1.0',
     credit_multiplier: '1.0',
     exchange_rate: '1.0',
