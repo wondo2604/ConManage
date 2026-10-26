@@ -12,6 +12,7 @@ export default function GigTab({ user, refreshUser }) {
   const [showApproveModal, setShowApproveModal] = useState(false);
   const [targetJob, setTargetJob] = useState(null);
   const [federationPointsInput, setFederationPointsInput] = useState(20);
+  const [approveMaxWorkersInput, setApproveMaxWorkersInput] = useState(1);
 
   // 최종 지급 심사 시 수치 커스텀 조절
   const [finalPayMap, setFinalPayMap] = useState({});
@@ -24,6 +25,7 @@ export default function GigTab({ user, refreshUser }) {
     description: '',
     pay_credit: 1000,
     federation_points: 20,
+    max_workers: 1,
     work_date: '',
     duration_text: '약 1시간 소요',
     notes: '',
@@ -72,7 +74,7 @@ export default function GigTab({ user, refreshUser }) {
           method: 'PUT',
           body: JSON.stringify(form)
         });
-        alert('단기 알바 공고 및 보수/포인트 수치가 수정되었습니다.');
+        alert('단기 알바 공고 및 모집 인원/보수 수치가 수정되었습니다.');
       } else {
         await apiRequest('/jobs', {
           method: 'POST',
@@ -88,6 +90,7 @@ export default function GigTab({ user, refreshUser }) {
         description: '',
         pay_credit: 1000,
         federation_points: 20,
+        max_workers: 1,
         work_date: '',
         duration_text: '약 1시간 소요',
         notes: '',
@@ -115,7 +118,10 @@ export default function GigTab({ user, refreshUser }) {
     try {
       await apiRequest(`/jobs/${targetJob.id}/approve`, {
         method: 'PUT',
-        body: JSON.stringify({ federation_points: federationPointsInput })
+        body: JSON.stringify({
+          federation_points: federationPointsInput,
+          max_workers: approveMaxWorkersInput
+        })
       });
       alert('공고가 승인되어 게시되었습니다. 디스코드 알림이 전송되었습니다.');
       setShowApproveModal(false);
@@ -130,8 +136,8 @@ export default function GigTab({ user, refreshUser }) {
   const handleApplyGig = async (jobId) => {
     if (!confirm('이 단기 알바에 지원하시겠습니까?')) return;
     try {
-      await apiRequest(`/jobs/${jobId}/apply`, { method: 'POST' });
-      alert('지원이 완료되어 채용되었습니다! 작업을 진행해 주세요.');
+      const res = await apiRequest(`/jobs/${jobId}/apply`, { method: 'POST' });
+      alert(res.message || '지원이 완료되어 채용되었습니다! 작업을 진행해 주세요.');
       loadData();
     } catch (err) {
       alert(err.message);
@@ -140,7 +146,7 @@ export default function GigTab({ user, refreshUser }) {
 
   // 완료 체크 (사업가 / 구직자)
   const handleCompleteGig = async (jobId) => {
-    if (!confirm('작업 완료를 확정하시겠습니까? 양측 모두 완료 시 기업 관리자 최종 검토로 전달됩니다.')) return;
+    if (!confirm('작업 완료를 확정하시겠습니까? 고용주와 구직자 모두 완료 시 기업 관리자 최종 검토로 전달됩니다.')) return;
     try {
       const res = await apiRequest(`/jobs/${jobId}/complete`, { method: 'POST' });
       alert(res.message);
@@ -155,8 +161,10 @@ export default function GigTab({ user, refreshUser }) {
     const jobId = job.id;
     const customPay = finalPayMap[jobId] ?? job.pay_credit;
     const customPts = finalPtsMap[jobId] ?? job.federation_points;
+    const workers = Array.isArray(job.workers) ? job.workers : [];
+    const workerCnt = workers.length || (job.worker_id ? 1 : 0);
 
-    if (!confirm(`노동 여부를 확인하고 ${decision === 'approve' ? `최종 보수(+${Number(customPay).toLocaleString()}C) 및 포인트(+${Number(customPts)}P)를 지급` : '취소/반려'}하시겠습니까?`)) return;
+    if (!confirm(`노동 여부를 확인하고 ${decision === 'approve' ? `구직자 ${workerCnt}명에게 1인당 보수(+${Number(customPay).toLocaleString()}C) 및 포인트(+${Number(customPts)}P)를 지급` : '취소/반려'}하시겠습니까?`)) return;
     try {
       const res = await apiRequest(`/jobs/${jobId}/finalize`, {
         method: 'PUT',
@@ -176,14 +184,14 @@ export default function GigTab({ user, refreshUser }) {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24, flexWrap: 'wrap', gap: 12 }}>
         <div>
           <h2 style={{ fontSize: 20, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 10 }}>
             <Briefcase color="var(--primary)" size={24} />
             <span>단기 알바 구인 & 매칭</span>
           </h2>
           <p style={{ color: 'var(--text-muted)', fontSize: 13, marginTop: 4 }}>
-            사업가는 노동력을 구인하고, 구직자는 크레딧과 연방 포인트를 획득할 수 있습니다.
+            사업가는 필요한 구직자 인원 수를 설정해 구인하고, 구직자는 크레딧과 연방 포인트를 획득할 수 있습니다.
           </p>
         </div>
 
@@ -198,6 +206,7 @@ export default function GigTab({ user, refreshUser }) {
                 description: '',
                 pay_credit: 1000,
                 federation_points: 20,
+                max_workers: 1,
                 work_date: '',
                 duration_text: '약 1시간 소요',
                 notes: '',
@@ -220,24 +229,46 @@ export default function GigTab({ user, refreshUser }) {
         ) : (
           jobs.map((job) => {
             const isEmployer = job.employer_id === user.id;
-            const isWorker = job.worker_id === user.id;
+            const workers = Array.isArray(job.workers) ? job.workers : [];
+            const maxWorkers = Math.max(1, Number(job.max_workers) || 1);
+            const myWorkerEntry = workers.find(w => Number(w.user_id) === user.id);
+            const isWorker = Boolean(myWorkerEntry) || job.worker_id === user.id;
+            const myWorkerCompleted = myWorkerEntry ? myWorkerEntry.worker_completed === 1 : Boolean(job.worker_completed);
+            const completedWorkersCount = workers.filter(w => w.worker_completed === 1).length;
+            const canStillApply = (job.status === 'open' || job.status === 'in_progress') && workers.length < maxWorkers && !isEmployer && !isWorker;
 
             return (
               <div key={job.id} className="card" style={{ marginBottom: 0, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
                 <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12, gap: 8 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                       <span className="badge badge-role" style={{ fontSize: 13 }}>
                         {job.work_type === '기타' && job.custom_work_type ? job.custom_work_type : job.work_type}
+                      </span>
+                      <span
+                        className="badge"
+                        style={{
+                          background: workers.length >= maxWorkers ? '#fef3c7' : '#e0f2fe',
+                          color: workers.length >= maxWorkers ? '#b45309' : '#0369a1',
+                          border: `1px solid ${workers.length >= maxWorkers ? '#fde68a' : '#bae6fd'}`,
+                          fontSize: 12,
+                          fontWeight: 700
+                        }}
+                      >
+                        👥 구직자 {workers.length} / {maxWorkers}명
                       </span>
                       <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>
                         구인자: {job.employer_name || job.employer_username}
                       </span>
                     </div>
 
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
                       {job.status === 'pending_approval' && <span className="badge badge-pending">포인트 책정 대기</span>}
-                      {job.status === 'open' && <span className="badge badge-approved">구인 중</span>}
+                      {job.status === 'open' && (
+                        <span className="badge badge-approved">
+                          {workers.length > 0 ? `구인 중 (${workers.length}/${maxWorkers}명)` : '구인 중'}
+                        </span>
+                      )}
                       {job.status === 'in_progress' && <span className="badge badge-role">작업 진행 중</span>}
                       {job.status === 'both_done_pending_review' && <span className="badge badge-pending">최종 지급 심사 중</span>}
                       {job.status === 'completed' && <span className="badge badge-approved">지급 완료</span>}
@@ -254,6 +285,7 @@ export default function GigTab({ user, refreshUser }) {
                                 description: job.description,
                                 pay_credit: job.pay_credit,
                                 federation_points: job.federation_points || 0,
+                                max_workers: maxWorkers,
                                 work_date: job.work_date,
                                 duration_text: job.duration_text,
                                 notes: job.notes || '',
@@ -284,6 +316,12 @@ export default function GigTab({ user, refreshUser }) {
 
                   <div style={{ background: 'var(--bg-tertiary)', padding: 12, borderRadius: 8, fontSize: 13, display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 16 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span style={{ color: 'var(--text-muted)' }}>모집 구직자 수</span>
+                      <span style={{ fontWeight: 700, color: 'var(--text-main)' }}>
+                        총 {maxWorkers}명 (현재 {workers.length}명 지원)
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                       <span style={{ color: 'var(--text-muted)' }}>일시</span>
                       <span style={{ fontWeight: 600 }}>{job.work_date}</span>
                     </div>
@@ -297,20 +335,37 @@ export default function GigTab({ user, refreshUser }) {
                         <span style={{ color: 'var(--text-secondary)' }}>{job.notes}</span>
                       </div>
                     )}
-                    {job.worker_name && (
-                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <span style={{ color: 'var(--text-muted)' }}>채용된 구직자</span>
-                        <span style={{ color: 'var(--primary)', fontWeight: 700 }}>{job.worker_name}</span>
+                    {workers.length > 0 && (
+                      <div style={{ marginTop: 4, paddingTop: 6, borderTop: '1px solid var(--border-color)' }}>
+                        <div style={{ color: 'var(--text-muted)', marginBottom: 4, fontSize: 12, fontWeight: 600 }}>
+                          채용된 구직자 목록 ({workers.length}/{maxWorkers}명)
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                          {workers.map((w, idx) => (
+                            <span
+                              key={w.user_id || idx}
+                              className="badge"
+                              style={{
+                                background: w.worker_completed ? '#d1fae5' : '#ffffff',
+                                color: w.worker_completed ? '#065f46' : 'var(--text-main)',
+                                border: '1px solid var(--border-color)',
+                                fontSize: 12
+                              }}
+                            >
+                              {w.nickname || w.username} {w.worker_completed ? '✅' : '⏳'}
+                            </span>
+                          ))}
+                        </div>
                       </div>
                     )}
                   </div>
 
                   <div style={{ display: 'flex', gap: 10 }}>
                     <div className="asset-pill credit" style={{ flex: 1, justifyContent: 'center' }}>
-                      페이: {job.pay_credit.toLocaleString()} C
+                      1인당 페이: {job.pay_credit.toLocaleString()} C
                     </div>
                     <div className="asset-pill point" style={{ flex: 1, justifyContent: 'center' }}>
-                      포인트: {job.federation_points} P
+                      1인당 포인트: {job.federation_points} P
                     </div>
                   </div>
                 </div>
@@ -324,6 +379,7 @@ export default function GigTab({ user, refreshUser }) {
                       onClick={() => {
                         setTargetJob(job);
                         setFederationPointsInput(job.federation_points || 20);
+                        setApproveMaxWorkersInput(maxWorkers);
                         setShowApproveModal(true);
                       }}
                     >
@@ -331,24 +387,33 @@ export default function GigTab({ user, refreshUser }) {
                     </button>
                   )}
 
-                  {/* 2) 구직 지원 */}
-                  {job.status === 'open' && !isEmployer && (
+                  {/* 2) 구직 지원 (정원이 남아있고 본인이 고용주/기존 지원자가 아닐 때) */}
+                  {canStillApply && (
                     <button
                       className="btn btn-success"
                       style={{ width: '100%' }}
                       onClick={() => handleApplyGig(job.id)}
                     >
-                      <Users size={16} /> 알바 지원하기
+                      <Users size={16} /> 알바 지원하기 ({workers.length}/{maxWorkers}명)
                     </button>
                   )}
 
                   {/* 3) 진행 중: 완료 버튼 (사업가 / 구직자) */}
-                  {(job.status === 'in_progress' || job.status === 'both_done_pending_review') && (isEmployer || isWorker) && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {(job.status === 'open' || job.status === 'in_progress' || job.status === 'both_done_pending_review') && workers.length > 0 && (isEmployer || isWorker) && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: canStillApply ? 8 : 0 }}>
                       <div style={{ fontSize: 12, color: 'var(--text-muted)', textAlign: 'center' }}>
-                        고용주 완료: {job.employer_completed ? '✅ 완료' : '⏳ 미완료'} | 구직자 완료: {job.worker_completed ? '✅ 완료' : '⏳ 미완료'}
+                        고용주 완료: {job.employer_completed ? '✅ 완료' : '⏳ 미완료'} | 구직자 완료: {completedWorkersCount}/{workers.length}명 완료
                       </div>
-                      {((isEmployer && !job.employer_completed) || (isWorker && !job.worker_completed)) && (
+                      {isEmployer && !job.employer_completed && (
+                        <button
+                          className="btn btn-primary"
+                          style={{ width: '100%' }}
+                          onClick={() => handleCompleteGig(job.id)}
+                        >
+                          <CheckCircle size={16} /> 고용주 작업 완료 확정
+                        </button>
+                      )}
+                      {isWorker && !myWorkerCompleted && (
                         <button
                           className="btn btn-primary"
                           style={{ width: '100%' }}
@@ -365,7 +430,7 @@ export default function GigTab({ user, refreshUser }) {
                     <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border-color)' }}>
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
                         <div>
-                          <label style={{ fontSize: 11, color: 'var(--text-muted)' }}>최종 지급 크레딧(C)</label>
+                          <label style={{ fontSize: 11, color: 'var(--text-muted)' }}>1인당 최종 지급 크레딧(C)</label>
                           <input
                             type="number"
                             className="input"
@@ -375,7 +440,7 @@ export default function GigTab({ user, refreshUser }) {
                           />
                         </div>
                         <div>
-                          <label style={{ fontSize: 11, color: 'var(--text-muted)' }}>최종 지급 포인트(P)</label>
+                          <label style={{ fontSize: 11, color: 'var(--text-muted)' }}>1인당 최종 지급 포인트(P)</label>
                           <input
                             type="number"
                             className="input"
@@ -391,7 +456,7 @@ export default function GigTab({ user, refreshUser }) {
                           style={{ flex: 1 }}
                           onClick={() => handleFinalize(job, 'approve')}
                         >
-                          최종 승인 & 지급
+                          최종 승인 & 지급 ({workers.length}명)
                         </button>
                         <button
                           className="btn btn-danger btn-sm"
@@ -418,21 +483,37 @@ export default function GigTab({ user, refreshUser }) {
               💼 {editingJob ? '알바 공고 및 수치 수정' : '알바 구인 등록 신청'}
             </h2>
             <form onSubmit={handleCreateJob}>
-              <div className="form-group">
-                <label className="form-label">노동 유형</label>
-                <select
-                  className="select"
-                  value={form.work_type}
-                  onChange={(e) => setForm({ ...form, work_type: e.target.value })}
-                >
-                  <option value="광질">광질</option>
-                  <option value="조합">조합</option>
-                  <option value="양조">양조</option>
-                  <option value="농사">농사</option>
-                  <option value="수집">수집</option>
-                  <option value="건축">건축</option>
-                  <option value="기타">기타 (직접 작성)</option>
-                </select>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <div className="form-group">
+                  <label className="form-label">노동 유형</label>
+                  <select
+                    className="select"
+                    value={form.work_type}
+                    onChange={(e) => setForm({ ...form, work_type: e.target.value })}
+                  >
+                    <option value="광질">광질</option>
+                    <option value="조합">조합</option>
+                    <option value="양조">양조</option>
+                    <option value="농사">농사</option>
+                    <option value="수집">수집</option>
+                    <option value="건축">건축</option>
+                    <option value="기타">기타 (직접 작성)</option>
+                  </select>
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">모집 구직자 수 (명)</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="100"
+                    className="input"
+                    placeholder="예: 1"
+                    value={form.max_workers}
+                    onChange={(e) => setForm({ ...form, max_workers: e.target.value })}
+                    required
+                  />
+                </div>
               </div>
 
               {form.work_type === '기타' && (
@@ -463,7 +544,7 @@ export default function GigTab({ user, refreshUser }) {
 
               <div style={{ display: 'grid', gridTemplateColumns: canManageCorporate ? '1fr 1fr' : '1fr', gap: 12 }}>
                 <div className="form-group">
-                  <label className="form-label">보수 페이 (크레딧)</label>
+                  <label className="form-label">1인당 보수 페이 (크레딧)</label>
                   <input
                     type="number"
                     min="0"
@@ -476,7 +557,7 @@ export default function GigTab({ user, refreshUser }) {
                 </div>
                 {canManageCorporate && (
                   <div className="form-group">
-                    <label className="form-label">연방 포인트 (기업 관리 권한)</label>
+                    <label className="form-label">1인당 연방 포인트 (기업 관리 권한)</label>
                     <input
                       type="number"
                       min="0"
@@ -528,7 +609,7 @@ export default function GigTab({ user, refreshUser }) {
                   취소
                 </button>
                 <button type="submit" className="btn btn-primary" style={{ flex: 1 }}>
-                  신청 등록하기
+                  {editingJob ? '수정 저장하기' : '신청 등록하기'}
                 </button>
               </div>
             </form>
@@ -544,25 +625,40 @@ export default function GigTab({ user, refreshUser }) {
               기업 관리: 연방 포인트 책정 & 승인
             </h2>
             <div style={{ marginBottom: 16, background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', padding: 14, borderRadius: 'var(--radius-md)', fontSize: 13, color: 'var(--text-main)', lineHeight: 1.6 }}>
-              <div><strong>유형:</strong> {targetJob.work_type}</div>
+              <div><strong>유형:</strong> {targetJob.work_type === '기타' && targetJob.custom_work_type ? targetJob.custom_work_type : targetJob.work_type}</div>
               <div><strong>내용:</strong> {targetJob.description}</div>
-              <div><strong>페이:</strong> {targetJob.pay_credit.toLocaleString()} 크레딧</div>
+              <div><strong>모집 인원:</strong> {targetJob.max_workers || 1}명</div>
+              <div><strong>1인당 페이:</strong> {targetJob.pay_credit.toLocaleString()} 크레딧</div>
             </div>
 
             <form onSubmit={handleApproveGig}>
-              <div className="form-group">
-                <label className="form-label">지급할 국가 기여 연방 포인트</label>
-                <input
-                  type="number"
-                  min="0"
-                  className="input"
-                  value={federationPointsInput}
-                  onChange={(e) => setFederationPointsInput(e.target.value)}
-                  required
-                />
-                <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 4 }}>
-                  승인 시 디스코드 웹훅 알림이 발송되며 구인 공고가 오픈됩니다.
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <div className="form-group">
+                  <label className="form-label">1인당 국가 기여 연방 포인트</label>
+                  <input
+                    type="number"
+                    min="0"
+                    className="input"
+                    value={federationPointsInput}
+                    onChange={(e) => setFederationPointsInput(e.target.value)}
+                    required
+                  />
                 </div>
+                <div className="form-group">
+                  <label className="form-label">모집 구직자 수 (명)</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="100"
+                    className="input"
+                    value={approveMaxWorkersInput}
+                    onChange={(e) => setApproveMaxWorkersInput(e.target.value)}
+                    required
+                  />
+                </div>
+              </div>
+              <div style={{ fontSize: 12, color: '#94a3b8', marginTop: -8, marginBottom: 16 }}>
+                승인 시 디스코드 웹훅 알림이 발송되며 구인 공고가 오픈됩니다.
               </div>
 
               <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>

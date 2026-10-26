@@ -361,6 +361,7 @@ export function initDatabase() {
     CREATE TABLE IF NOT EXISTS supplies (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
+      category TEXT DEFAULT '광물',
       unit TEXT DEFAULT '개',
       points_per_unit INTEGER DEFAULT 0,
       credits_per_unit INTEGER DEFAULT 0,
@@ -409,6 +410,8 @@ export function initDatabase() {
     CREATE TABLE IF NOT EXISTS shop_items (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
+      category TEXT DEFAULT '일상, 전투 아이템',
+      unit TEXT DEFAULT '개',
       price INTEGER NOT NULL,
       stock INTEGER DEFAULT -1,
       description TEXT,
@@ -440,6 +443,8 @@ export function initDatabase() {
       duration_text TEXT NOT NULL,
       notes TEXT,
       federation_points INTEGER DEFAULT 0,
+      max_workers INTEGER DEFAULT 1,
+      workers_json TEXT DEFAULT '[]',
       status TEXT DEFAULT 'pending_approval',
       worker_id INTEGER,
       employer_completed INTEGER DEFAULT 0,
@@ -603,6 +608,16 @@ export function initDatabase() {
   try { db.exec(`ALTER TABLE notices ADD COLUMN mention_type TEXT DEFAULT 'none';`); } catch (e) {}
   try { db.exec(`ALTER TABLE notices ADD COLUMN embed_color TEXT DEFAULT '#3b82f6';`); } catch (e) {}
   try { db.exec(`ALTER TABLE notices ADD COLUMN message_template TEXT DEFAULT '';`); } catch (e) {}
+  try { db.exec(`ALTER TABLE supplies ADD COLUMN category TEXT DEFAULT '광물';`); } catch (e) {}
+  try { db.exec(`UPDATE supplies SET category = '광물' WHERE category IS NULL OR category = '';`); } catch (e) {}
+  try { db.exec(`ALTER TABLE shop_items ADD COLUMN category TEXT DEFAULT '일상, 전투 아이템';`); } catch (e) {}
+  try { db.exec(`ALTER TABLE shop_items ADD COLUMN unit TEXT DEFAULT '개';`); } catch (e) {}
+  try { db.exec(`UPDATE shop_items SET category = '일상, 전투 아이템' WHERE category IS NULL OR category = '';`); } catch (e) {}
+  try { db.exec(`UPDATE shop_items SET unit = '개' WHERE unit IS NULL OR unit = '';`); } catch (e) {}
+  try { db.exec(`ALTER TABLE part_time_jobs ADD COLUMN max_workers INTEGER DEFAULT 1;`); } catch (e) {}
+  try { db.exec(`ALTER TABLE part_time_jobs ADD COLUMN workers_json TEXT DEFAULT '[]';`); } catch (e) {}
+  try { db.exec(`UPDATE part_time_jobs SET max_workers = 1 WHERE max_workers IS NULL OR max_workers < 1;`); } catch (e) {}
+  try { db.exec(`UPDATE part_time_jobs SET workers_json = '[]' WHERE workers_json IS NULL OR workers_json = '';`); } catch (e) {}
 
   // supply_requests.supply_id NOT NULL 제약 해제 마이그레이션 (자율 직접 입력 납품 지원)
   try {

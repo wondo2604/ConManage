@@ -3,7 +3,9 @@ import { apiRequest } from '../api';
 import {
   Trophy, Crown, Plus, Flame,
   RotateCcw, Edit2, Sliders,
-  Award, Zap, Coins
+  Award, Zap, Coins, Package,
+  Compass, Briefcase, Calendar,
+  Sparkles, Bell
 } from 'lucide-react';
 
 export default function RankingTab({ user, refreshUser }) {
@@ -268,10 +270,10 @@ export default function RankingTab({ user, refreshUser }) {
   const myPoints = myRow ? (myRow.points || 0) : (user.points || 0);
 
   const getRankBadge = (index) => {
-    if (index === 0) return <div style={{ width: 30, height: 30, borderRadius: '50%', background: 'linear-gradient(135deg, #f59e0b, #d97706)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, boxShadow: '0 4px 10px rgba(245, 158, 11, 0.4)' }}><Crown size={16} /></div>;
-    if (index === 1) return <div style={{ width: 30, height: 30, borderRadius: '50%', background: 'linear-gradient(135deg, #94a3b8, #64748b)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 13 }}>2</div>;
-    if (index === 2) return <div style={{ width: 30, height: 30, borderRadius: '50%', background: 'linear-gradient(135deg, #d97706, #92400e)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 13 }}>3</div>;
-    return <div style={{ width: 30, height: 30, borderRadius: '50%', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 12 }}>{index + 1}</div>;
+    if (index === 0) return <div style={{ width: 30, height: 30, borderRadius: '50%', background: 'linear-gradient(135deg, #f59e0b, #d97706)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, flexShrink: 0, boxShadow: '0 4px 10px rgba(245, 158, 11, 0.35)' }}><Crown size={15} /></div>;
+    if (index === 1) return <div style={{ width: 30, height: 30, borderRadius: '50%', background: 'linear-gradient(135deg, #94a3b8, #64748b)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 13, flexShrink: 0 }}>2</div>;
+    if (index === 2) return <div style={{ width: 30, height: 30, borderRadius: '50%', background: 'linear-gradient(135deg, #d97706, #92400e)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 13, flexShrink: 0 }}>3</div>;
+    return <div style={{ width: 30, height: 30, borderRadius: '50%', background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 12, flexShrink: 0 }}>{index + 1}</div>;
   };
 
   return (
@@ -279,9 +281,9 @@ export default function RankingTab({ user, refreshUser }) {
       {/* 상단 헤더 & 컨트롤 바 */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20, flexWrap: 'wrap', gap: 14 }}>
         <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <Trophy color="#f59e0b" size={26} />
-            <h2 style={{ fontSize: 22, fontWeight: 800 }}>시즌 랭킹</h2>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <Trophy color="#f59e0b" size={26} style={{ flexShrink: 0 }} />
+            <h2 style={{ fontSize: 22, fontWeight: 800, whiteSpace: 'nowrap' }}>시즌 랭킹</h2>
             {(Number(config.point_multiplier) !== 1 || Number(config.credit_multiplier) !== 1) && (
               <span className="badge" style={{ background: '#fee2e2', color: '#991b1b', fontWeight: 800 }}>
                 <Zap size={13} /> 배율 적용중 (포인트 x{config.point_multiplier} / 크레딧 x{config.credit_multiplier})
@@ -289,7 +291,7 @@ export default function RankingTab({ user, refreshUser }) {
             )}
           </div>
           <p style={{ color: 'var(--text-muted)', fontSize: 13, marginTop: 4 }}>
-            시즌별 연방 포인트 순위를 안내합니다.
+            시즌별 연방 포인트 및 크레딧 순위를 안내합니다.
           </p>
         </div>
 
@@ -300,7 +302,7 @@ export default function RankingTab({ user, refreshUser }) {
               <button
                 type="button"
                 className={`btn btn-sm ${sortBy === 'points' ? 'btn-primary' : ''}`}
-                style={{ background: sortBy === 'points' ? undefined : 'transparent', color: sortBy === 'points' ? undefined : 'var(--text-secondary)' }}
+                style={{ background: sortBy === 'points' ? undefined : 'transparent', color: sortBy === 'points' ? undefined : 'var(--text-secondary)', whiteSpace: 'nowrap' }}
                 onClick={() => handleSortChange('points')}
               >
                 <Trophy size={13} /> 포인트(P) 순위
@@ -308,7 +310,7 @@ export default function RankingTab({ user, refreshUser }) {
               <button
                 type="button"
                 className={`btn btn-sm ${sortBy === 'credits' ? 'btn-primary' : ''}`}
-                style={{ background: sortBy === 'credits' ? undefined : 'transparent', color: sortBy === 'credits' ? undefined : 'var(--text-secondary)' }}
+                style={{ background: sortBy === 'credits' ? undefined : 'transparent', color: sortBy === 'credits' ? undefined : 'var(--text-secondary)', whiteSpace: 'nowrap' }}
                 onClick={() => handleSortChange('credits')}
               >
                 <Coins size={13} /> 크레딧(C) 순위
@@ -322,26 +324,27 @@ export default function RankingTab({ user, refreshUser }) {
             onChange={handleSeasonChange}
             style={{ width: 220 }}
           >
-            <option value="all">🌐 전 시즌 통합 누적</option>
+            <option value="all">[통합] 전 시즌 누적 랭킹</option>
             {seasons.map((s) => (
               <option key={s.id} value={s.id}>
-                {s.name} {s.is_active === 1 ? '🔥(진행중)' : ''}
+                {s.name} {s.is_active === 1 ? '(진행중)' : ''}
               </option>
             ))}
           </select>
 
           {canManageRanking && (
             <>
-              <button className="btn btn-secondary btn-sm" onClick={() => setShowSeasonModal(true)}>
+              <button className="btn btn-secondary btn-sm" onClick={() => setShowSeasonModal(true)} style={{ whiteSpace: 'nowrap' }}>
                 <Plus size={14} /> 시즌 관리
               </button>
-              <button className="btn btn-primary btn-sm" onClick={() => setShowAdminStudio(true)}>
+              <button className="btn btn-primary btn-sm" onClick={() => setShowAdminStudio(true)} style={{ whiteSpace: 'nowrap' }}>
                 <Sliders size={14} /> 랭킹 설정
               </button>
               <button
                 className="btn btn-danger btn-sm"
                 onClick={() => setShowResetModal(true)}
                 title="시즌 또는 전체 랭킹 초기화"
+                style={{ whiteSpace: 'nowrap' }}
               >
                 <RotateCcw size={14} /> 랭킹 초기화
               </button>
@@ -359,24 +362,26 @@ export default function RankingTab({ user, refreshUser }) {
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 16 }}>
           <div style={{ flex: 1, minWidth: 260 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
               <span className="badge" style={{ background: '#f59e0b', color: '#fff', fontWeight: 800 }}>
                 <Flame size={13} /> {currentSeasonObj ? currentSeasonObj.name : '통합 시즌'}
               </span>
               {currentSeasonObj?.start_date && (
-                <span style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>
-                  📅 {currentSeasonObj.start_date} ~ {currentSeasonObj.end_date || '상시'}
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>
+                  <Calendar size={13} />
+                  <span>{currentSeasonObj.start_date} ~ {currentSeasonObj.end_date || '상시'}</span>
                 </span>
               )}
             </div>
             {config.ranking_board_notice && (
-              <div style={{ fontSize: 14, fontWeight: 700, color: '#92400e', lineHeight: 1.5 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: '#92400e', lineHeight: 1.55 }}>
                 {config.ranking_board_notice}
               </div>
             )}
             {currentSeasonObj?.reward_description && (
-              <div style={{ fontSize: 12, color: '#b45309', marginTop: 4, fontWeight: 600 }}>
-                🎁 시즌 보상 안내: {currentSeasonObj.reward_description}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#b45309', marginTop: 6, fontWeight: 600, flexWrap: 'wrap' }}>
+                <Sparkles size={13} style={{ flexShrink: 0 }} />
+                <span>시즌 보상 안내: {currentSeasonObj.reward_description}</span>
               </div>
             )}
           </div>
@@ -389,12 +394,13 @@ export default function RankingTab({ user, refreshUser }) {
             background: '#ffffff',
             padding: '12px 18px',
             borderRadius: 12,
-            border: '1px solid var(--border-color)'
+            border: '1px solid var(--border-color)',
+            flexWrap: 'wrap'
           }}>
             <div>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 700 }}>나의 현재 순위</div>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 2 }}>
-                <span style={{ fontSize: 22, fontWeight: 900, color: 'var(--primary)' }}>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 700, whiteSpace: 'nowrap' }}>나의 현재 순위</div>
+              <div className="ranking-num" style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 2 }}>
+                <span style={{ fontSize: 22, fontWeight: 800, color: 'var(--primary)' }}>
                   {myIndex >= 0 ? `${myIndex + 1}위` : '-'}
                 </span>
                 <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--point-gold)' }}>
@@ -402,9 +408,18 @@ export default function RankingTab({ user, refreshUser }) {
                 </span>
               </div>
             </div>
-            <div style={{ borderLeft: '1px solid var(--border-color)', paddingLeft: 16, fontSize: 12, color: 'var(--text-secondary)', fontWeight: 600 }}>
-              <div>📦 납품 {myRow?.supply_count || 0}회</div>
-              <div style={{ marginTop: 2 }}>⚔️ 퀘스트 {myRow?.quest_count || 0}회 · ⛏️ 알바 {myRow?.job_count || 0}회</div>
+            <div style={{ borderLeft: '1px solid var(--border-color)', paddingLeft: 16, display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                <span className="ranking-activity-chip">
+                  <Package size={12} /> 납품 {myRow?.supply_count || 0}회
+                </span>
+                <span className="ranking-activity-chip">
+                  <Compass size={12} /> 퀘스트 {myRow?.quest_count || 0}회
+                </span>
+                <span className="ranking-activity-chip">
+                  <Briefcase size={12} /> 알바 {myRow?.job_count || 0}회
+                </span>
+              </div>
             </div>
           </div>
         </div>
@@ -412,69 +427,147 @@ export default function RankingTab({ user, refreshUser }) {
 
       {/* Top 3 순위 포디움 */}
       {ranking.length >= 3 && (
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: '1fr 1.2fr 1fr',
-          gap: 18,
-          marginBottom: 28,
-          alignItems: 'flex-end'
-        }}>
+        <div className="ranking-podium-grid">
           {/* 2위 */}
-          <div className="card" style={{ textAlign: 'center', padding: '22px 16px', background: 'linear-gradient(180deg, #f8fafc 0%, #ffffff 100%)', borderTop: '4px solid #94a3b8', marginBottom: 0 }}>
-            <div style={{ width: 44, height: 44, borderRadius: '50%', background: '#94a3b8', margin: '0 auto 10px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 800 }}>
-              🥈 2위
-            </div>
-            {ranking[1].roles?.[0] && (
-              <div style={{ fontSize: 11, fontWeight: 700, color: ranking[1].roles[0].color, marginBottom: 2 }}>
-                ● {ranking[1].roles[0].name}
+          <div
+            className="card ranking-podium-card"
+            style={{
+              padding: '22px 16px',
+              background: 'linear-gradient(180deg, #f8fafc 0%, #ffffff 100%)',
+              borderTop: '4px solid #94a3b8'
+            }}
+          >
+            <div style={{ width: '100%' }}>
+              <div
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 5,
+                  padding: '4px 12px',
+                  borderRadius: 999,
+                  background: '#64748b',
+                  color: '#fff',
+                  fontWeight: 800,
+                  fontSize: 12,
+                  marginBottom: 10,
+                  whiteSpace: 'nowrap'
+                }}
+              >
+                <Award size={14} /> 2위
               </div>
-            )}
-            <h3 style={{ fontSize: 17, fontWeight: 800 }}>{ranking[1].nickname || ranking[1].username}</h3>
-            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>@{ranking[1].username}</span>
-            <div className={`asset-pill ${sortBy === 'credits' ? 'credit' : 'point'}`} style={{ justifyContent: 'center', marginTop: 12, fontSize: 14 }}>
+              {ranking[1].roles?.[0] && (
+                <div className="ranking-player-name" style={{ fontSize: 11, fontWeight: 700, color: ranking[1].roles[0].color, marginBottom: 3 }}>
+                  ● {ranking[1].roles[0].name}
+                </div>
+              )}
+              <h3 className="ranking-player-name" style={{ fontSize: 17, fontWeight: 800 }}>
+                {ranking[1].nickname || ranking[1].username}
+              </h3>
+              <div className="ranking-player-name" style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+                @{ranking[1].username}
+              </div>
+            </div>
+            <div
+              className={`asset-pill ranking-num ${sortBy === 'credits' ? 'credit' : 'point'}`}
+              style={{ justifyContent: 'center', marginTop: 14, fontSize: 14, width: '100%' }}
+            >
               {sortBy === 'credits' ? `${(ranking[1].credits || 0).toLocaleString()} C` : `${ranking[1].points.toLocaleString()} P`}
             </div>
           </div>
 
           {/* 1위 */}
-          <div className="card" style={{
-            textAlign: 'center',
-            padding: '28px 18px',
-            background: 'linear-gradient(180deg, #fffbeb 0%, #ffffff 100%)',
-            border: '2px solid #f59e0b',
-            borderTop: '6px solid #f59e0b',
-            boxShadow: '0 10px 24px -6px rgba(245, 158, 11, 0.22)',
-            marginBottom: 0
-          }}>
-            <Crown size={34} color="#f59e0b" style={{ margin: '0 auto 6px' }} />
-            <div style={{ display: 'inline-block', padding: '3px 12px', borderRadius: 999, background: '#f59e0b', color: '#fff', fontWeight: 800, fontSize: 12, marginBottom: 8 }}>
-              👑 1위
-            </div>
-            {ranking[0].roles?.[0] && (
-              <div style={{ fontSize: 12, fontWeight: 800, color: ranking[0].roles[0].color, marginBottom: 2 }}>
-                ● {ranking[0].roles[0].name}
+          <div
+            className="card ranking-podium-card"
+            style={{
+              padding: '26px 18px',
+              background: 'linear-gradient(180deg, #fffbeb 0%, #ffffff 100%)',
+              border: '2px solid #f59e0b',
+              borderTop: '6px solid #f59e0b',
+              boxShadow: '0 10px 24px -6px rgba(245, 158, 11, 0.22)'
+            }}
+          >
+            <div style={{ width: '100%' }}>
+              <div
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '4px 14px',
+                  borderRadius: 999,
+                  background: 'linear-gradient(135deg, #f59e0b, #d97706)',
+                  color: '#fff',
+                  fontWeight: 800,
+                  fontSize: 13,
+                  marginBottom: 10,
+                  whiteSpace: 'nowrap',
+                  boxShadow: '0 4px 10px rgba(245, 158, 11, 0.3)'
+                }}
+              >
+                <Crown size={15} /> 1위
               </div>
-            )}
-            <h3 style={{ fontSize: 20, fontWeight: 900, color: '#b45309' }}>{ranking[0].nickname || ranking[0].username}</h3>
-            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>@{ranking[0].username}</span>
-            <div className={`asset-pill ${sortBy === 'credits' ? 'credit' : 'point'}`} style={{ justifyContent: 'center', marginTop: 12, fontSize: 16, fontWeight: 800 }}>
+              {ranking[0].roles?.[0] && (
+                <div className="ranking-player-name" style={{ fontSize: 12, fontWeight: 800, color: ranking[0].roles[0].color, marginBottom: 3 }}>
+                  ● {ranking[0].roles[0].name}
+                </div>
+              )}
+              <h3 className="ranking-player-name" style={{ fontSize: 20, fontWeight: 800, color: '#b45309' }}>
+                {ranking[0].nickname || ranking[0].username}
+              </h3>
+              <div className="ranking-player-name" style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+                @{ranking[0].username}
+              </div>
+            </div>
+            <div
+              className={`asset-pill ranking-num ${sortBy === 'credits' ? 'credit' : 'point'}`}
+              style={{ justifyContent: 'center', marginTop: 14, fontSize: 16, fontWeight: 800, width: '100%' }}
+            >
               {sortBy === 'credits' ? `${(ranking[0].credits || 0).toLocaleString()} C` : `${ranking[0].points.toLocaleString()} P`}
             </div>
           </div>
 
           {/* 3위 */}
-          <div className="card" style={{ textAlign: 'center', padding: '20px 16px', background: 'linear-gradient(180deg, #fff7ed 0%, #ffffff 100%)', borderTop: '4px solid #d97706', marginBottom: 0 }}>
-            <div style={{ width: 44, height: 44, borderRadius: '50%', background: '#d97706', margin: '0 auto 10px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 800 }}>
-              🥉 3위
-            </div>
-            {ranking[2].roles?.[0] && (
-              <div style={{ fontSize: 11, fontWeight: 700, color: ranking[2].roles[0].color, marginBottom: 2 }}>
-                ● {ranking[2].roles[0].name}
+          <div
+            className="card ranking-podium-card"
+            style={{
+              padding: '22px 16px',
+              background: 'linear-gradient(180deg, #fff7ed 0%, #ffffff 100%)',
+              borderTop: '4px solid #d97706'
+            }}
+          >
+            <div style={{ width: '100%' }}>
+              <div
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 5,
+                  padding: '4px 12px',
+                  borderRadius: 999,
+                  background: '#d97706',
+                  color: '#fff',
+                  fontWeight: 800,
+                  fontSize: 12,
+                  marginBottom: 10,
+                  whiteSpace: 'nowrap'
+                }}
+              >
+                <Award size={14} /> 3위
               </div>
-            )}
-            <h3 style={{ fontSize: 17, fontWeight: 800 }}>{ranking[2].nickname || ranking[2].username}</h3>
-            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>@{ranking[2].username}</span>
-            <div className={`asset-pill ${sortBy === 'credits' ? 'credit' : 'point'}`} style={{ justifyContent: 'center', marginTop: 12, fontSize: 14 }}>
+              {ranking[2].roles?.[0] && (
+                <div className="ranking-player-name" style={{ fontSize: 11, fontWeight: 700, color: ranking[2].roles[0].color, marginBottom: 3 }}>
+                  ● {ranking[2].roles[0].name}
+                </div>
+              )}
+              <h3 className="ranking-player-name" style={{ fontSize: 17, fontWeight: 800 }}>
+                {ranking[2].nickname || ranking[2].username}
+              </h3>
+              <div className="ranking-player-name" style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+                @{ranking[2].username}
+              </div>
+            </div>
+            <div
+              className={`asset-pill ranking-num ${sortBy === 'credits' ? 'credit' : 'point'}`}
+              style={{ justifyContent: 'center', marginTop: 14, fontSize: 14, width: '100%' }}
+            >
               {sortBy === 'credits' ? `${(ranking[2].credits || 0).toLocaleString()} C` : `${ranking[2].points.toLocaleString()} P`}
             </div>
           </div>
@@ -491,7 +584,7 @@ export default function RankingTab({ user, refreshUser }) {
 
           {canManageRanking && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer', color: 'var(--text-secondary)', fontWeight: 600 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer', color: 'var(--text-secondary)', fontWeight: 600, whiteSpace: 'nowrap' }}>
                 <input
                   type="checkbox"
                   checked={includeHidden}
@@ -504,16 +597,16 @@ export default function RankingTab({ user, refreshUser }) {
         </div>
 
         <div className="table-container">
-          <table className="table">
+          <table className="table ranking-table">
             <thead>
               <tr>
-                <th style={{ width: 70 }}>순위</th>
-                <th>플레이어</th>
-                <th>역할</th>
-                <th>활동 기록</th>
-                <th style={{ textAlign: 'right' }}>시즌 포인트</th>
-                <th style={{ textAlign: 'right' }}>보유 크레딧</th>
-                {canManageRanking && <th style={{ textAlign: 'center' }}>관리</th>}
+                <th style={{ width: 68, textAlign: 'center' }}>순위</th>
+                <th style={{ minWidth: 170 }}>플레이어</th>
+                <th style={{ minWidth: 130 }}>역할</th>
+                <th style={{ minWidth: 220 }}>활동 기록</th>
+                <th style={{ minWidth: 130, textAlign: 'right' }}>시즌 포인트</th>
+                <th style={{ minWidth: 120, textAlign: 'right' }}>보유 크레딧</th>
+                {canManageRanking && <th style={{ width: 84, textAlign: 'center' }}>관리</th>}
               </tr>
             </thead>
             <tbody>
@@ -535,30 +628,30 @@ export default function RankingTab({ user, refreshUser }) {
                         opacity: row.is_hidden ? 0.65 : 1
                       }}
                     >
-                      <td>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <td style={{ textAlign: 'center' }}>
+                        <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
                           {getRankBadge(idx)}
                         </div>
                       </td>
                       <td>
                         <div>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                            <span style={{ fontWeight: 800, color: isMe ? 'var(--primary)' : (row.roles?.[0]?.color && row.roles[0].color !== '#99aab5' ? row.roles[0].color : 'var(--text-main)'), fontSize: 15 }}>
-                              {row.nickname || row.username} {isMe ? '(나)' : ''}
+                            <span style={{ fontWeight: 800, color: isMe ? 'var(--primary)' : (row.roles?.[0]?.color && row.roles[0].color !== '#99aab5' ? row.roles[0].color : 'var(--text-main)'), fontSize: 15, whiteSpace: 'nowrap' }}>
+                              {row.nickname || row.username}{isMe ? ' (나)' : ''}
                             </span>
                             {row.custom_title && (
                               <span className="badge" style={{ background: '#fef3c7', color: '#b45309', border: '1px solid #fde68a', fontSize: 11 }}>
-                                🏅 {row.custom_title}
+                                <Award size={11} /> {row.custom_title}
                               </span>
                             )}
                             {row.is_hidden === 1 && (
                               <span className="badge badge-rejected" style={{ fontSize: 10 }}>숨김됨</span>
                             )}
                           </div>
-                          <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                            @{row.username}
+                          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                            <span style={{ whiteSpace: 'nowrap' }}>@{row.username}</span>
                             {canManageRanking && row.admin_memo && (
-                              <span style={{ marginLeft: 8, color: '#d97706', fontWeight: 600 }}>[메모: {row.admin_memo}]</span>
+                              <span style={{ color: '#d97706', fontWeight: 600 }}>[메모: {row.admin_memo}]</span>
                             )}
                           </div>
                         </div>
@@ -587,31 +680,38 @@ export default function RankingTab({ user, refreshUser }) {
                         </div>
                       </td>
                       <td>
-                        <div style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                          <span title="승인된 납품 횟수">📦 납품 {row.supply_count || 0}</span>
-                          <span title="승인된 퀘스트 횟수">⚔️ 퀘스트 {row.quest_count || 0}</span>
-                          <span title="완수한 알바 횟수">⛏️ 알바 {row.job_count || 0}</span>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                          <span className="ranking-activity-chip" title="승인된 납품 횟수">
+                            <Package size={12} /> 납품 {row.supply_count || 0}
+                          </span>
+                          <span className="ranking-activity-chip" title="승인된 퀘스트 횟수">
+                            <Compass size={12} /> 퀘스트 {row.quest_count || 0}
+                          </span>
+                          <span className="ranking-activity-chip" title="완수한 알바 횟수">
+                            <Briefcase size={12} /> 알바 {row.job_count || 0}
+                          </span>
                         </div>
                       </td>
-                      <td style={{ textAlign: 'right' }}>
+                      <td className="ranking-num" style={{ textAlign: 'right' }}>
                         <div style={{ fontWeight: 800, color: 'var(--point-gold)', fontSize: 15 }}>
                           {(row.points || 0).toLocaleString()} P
                         </div>
                         {row.bonus_points !== 0 && (
-                          <div style={{ fontSize: 11, color: row.bonus_points > 0 ? '#059669' : '#dc2626', fontWeight: 600 }}>
+                          <div style={{ fontSize: 11, color: row.bonus_points > 0 ? '#059669' : '#dc2626', fontWeight: 600, marginTop: 2 }}>
                             (기본 {(row.base_points || 0).toLocaleString()} {row.bonus_points > 0 ? `+보너스 ${row.bonus_points}` : `페널티 ${row.bonus_points}`})
                           </div>
                         )}
                       </td>
-                      <td style={{ textAlign: 'right' }}>
+                      <td className="ranking-num" style={{ textAlign: 'right' }}>
                         <span style={{ fontWeight: 700, color: 'var(--point-emerald)', fontSize: 14 }}>
                           {(row.credits || 0).toLocaleString()} C
                         </span>
                       </td>
                       {canManageRanking && (
-                        <td style={{ textAlign: 'center' }}>
+                        <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
                           <button
                             className="btn btn-secondary btn-sm"
+                            style={{ whiteSpace: 'nowrap' }}
                             onClick={() => {
                               setEditingPlayer(row);
                               setPlayerForm({

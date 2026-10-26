@@ -669,6 +669,7 @@ function buildEventEmbed(type, data = {}, colorInt = 0x3b82f6) {
         color: colorInt,
         fields: [
           { name: '품목명', value: data.name || '-', inline: true },
+          { name: '카테고리 / 단위', value: `${data.category || '광물'} (${data.unit || '개'})`, inline: true },
           { name: '단위당 연방 포인트', value: `${Number(data.points_per_unit || 0).toLocaleString()} P / ${data.unit || '개'}`, inline: true },
           { name: '단위당 크레딧', value: `${Number(data.credits_per_unit || 0).toLocaleString()} C / ${data.unit || '개'}`, inline: true },
           { name: '등록 관리자', value: data.actor_name || '납품 관리자', inline: true }
@@ -684,7 +685,8 @@ function buildEventEmbed(type, data = {}, colorInt = 0x3b82f6) {
         color: colorInt,
         fields: [
           { name: '구매자', value: `${data.user_name || '-'} (@${data.username || '-'})`, inline: true },
-          { name: '구매 상품', value: data.item_name || '-', inline: true },
+          { name: '구매 상품', value: `${data.item_name || '-'} (1${data.unit || '개'})`, inline: true },
+          { name: '카테고리', value: data.category || '일상, 전투 아이템', inline: true },
           { name: '사용 포인트', value: `${Number(data.points_spent || 0).toLocaleString()} P`, inline: true },
           { name: '구매 후 잔여 포인트', value: `${Number(data.remaining_points ?? 0).toLocaleString()} P`, inline: true }
         ]
@@ -759,8 +761,9 @@ function buildEventEmbed(type, data = {}, colorInt = 0x3b82f6) {
         description: data.description || '단기 알바 구인이 승인되어 모집이 시작되었습니다.',
         color: colorInt,
         fields: [
-          { name: '보수(크레딧)', value: `${Number(data.pay_credit || 0).toLocaleString()} C`, inline: true },
-          { name: '연방 포인트', value: `${Number(data.federation_points || 0).toLocaleString()} P`, inline: true },
+          { name: '모집 인원', value: `${Math.max(1, Number(data.max_workers) || 1)}명`, inline: true },
+          { name: '1인당 보수(크레딧)', value: `${Number(data.pay_credit || 0).toLocaleString()} C`, inline: true },
+          { name: '1인당 연방 포인트', value: `${Number(data.federation_points || 0).toLocaleString()} P`, inline: true },
           { name: '작업 일시', value: data.work_date || '-', inline: true },
           { name: '소요 기간', value: data.duration_text || '-', inline: true },
           { name: '특이사항', value: data.notes || '없음' }
@@ -776,7 +779,8 @@ function buildEventEmbed(type, data = {}, colorInt = 0x3b82f6) {
         color: colorInt,
         fields: [
           { name: '고용주 (사업가)', value: `${data.employer_name || '-'} (@${data.employer_username || '-'})`, inline: true },
-          { name: '희망 보수', value: `${Number(data.pay_credit || 0).toLocaleString()} C`, inline: true },
+          { name: '모집 인원', value: `${Math.max(1, Number(data.max_workers) || 1)}명`, inline: true },
+          { name: '1인당 희망 보수', value: `${Number(data.pay_credit || 0).toLocaleString()} C`, inline: true },
           { name: '작업 일시 / 기간', value: `${data.work_date || '-'} (${data.duration_text || '-'})`, inline: true }
         ]
       };

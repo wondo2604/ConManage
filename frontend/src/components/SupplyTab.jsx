@@ -6,9 +6,30 @@ import {
   Trash2, Edit2, Layers, ListPlus
 } from 'lucide-react';
 
+export const SUPPLY_CATEGORIES = [
+  '광물',
+  '소모품',
+  '농산품'
+];
+
+export const SUPPLY_PRESET_UNITS = [
+  '개',
+  '세트',
+  '상자',
+  '큰상자',
+  '셜커상자'
+];
+
+const SUPPLY_CATEGORY_STYLE = {
+  '광물': { bg: '#e0f2fe', color: '#0369a1', border: '#bae6fd', emoji: '💎' },
+  '소모품': { bg: '#fef3c7', color: '#b45309', border: '#fde68a', emoji: '🧪' },
+  '농산품': { bg: '#d1fae5', color: '#047857', border: '#a7f3d0', emoji: '🌾' }
+};
+
 export default function SupplyTab({ user, refreshUser }) {
   const [supplies, setSupplies] = useState([]);
   const [requests, setRequests] = useState([]);
+  const [selectedCategory, setSelectedCategory] = useState('전체');
   const [notice, setNotice] = useState({
     title: '',
     content: '',
@@ -40,12 +61,20 @@ export default function SupplyTab({ user, refreshUser }) {
   });
 
   // 폼 상태
-  const [newSupply, setNewSupply] = useState({ name: '', unit: '개', points_per_unit: 10, credits_per_unit: 100, description: '' });
+  const [newSupply, setNewSupply] = useState({
+    name: '',
+    category: '광물',
+    unit: '개',
+    custom_unit: '',
+    points_per_unit: 10,
+    credits_per_unit: 100,
+    description: ''
+  });
   const [applyForm, setApplyForm] = useState({ amount: 1, chest_location: '', notes: '', proof_image: null });
 
-  // 자율 직접 입력 납품 폼 (다중 품목 지원!)
+  // 자율 직접 입력 납품 폼 (다중 품목 지원 + 단위 '기타' 직접 입력 지원)
   const [customItems, setCustomItems] = useState([
-    { name: '', amount: 1, unit: '개' }
+    { name: '', amount: 1, unit: '개', custom_unit: '' }
   ]);
   const [customApplyForm, setCustomApplyForm] = useState({
     chest_location: '',
@@ -117,25 +146,70 @@ export default function SupplyTab({ user, refreshUser }) {
     loadData();
   }, []);
 
+  const openCreateSupplyModal = (defaultCat) => {
+    const initialCat = defaultCat && defaultCat !== '전체' ? defaultCat : (selectedCategory !== '전체' ? selectedCategory : '광물');
+    setEditingSupply(null);
+    setNewSupply({
+      name: '',
+      category: initialCat,
+      unit: '개',
+      custom_unit: '',
+      points_per_unit: 10,
+      credits_per_unit: 100,
+      description: ''
+    });
+    setShowAddModal(true);
+  };
+
+  const openEditSupplyModal = (item) => {
+    const itemUnit = item.unit || '개';
+    const isPresetUnit = SUPPLY_PRESET_UNITS.includes(itemUnit);
+    const itemCat = SUPPLY_CATEGORIES.includes(item.category) ? item.category : '광물';
+
+    setEditingSupply(item);
+    setNewSupply({
+      name: item.name,
+      category: itemCat,
+      unit: isPresetUnit ? itemUnit : '기타',
+      custom_unit: isPresetUnit ? '' : itemUnit,
+      points_per_unit: item.points_per_unit,
+      credits_per_unit: item.credits_per_unit,
+      description: item.description || ''
+    });
+    setShowAddModal(true);
+  };
+
   const handleSaveSupply = async (e) => {
     e.preventDefault();
+    const resolvedUnit = newSupply.unit === '기타' ? (newSupply.custom_unit || '').trim() : newSupply.unit;
+    if (!resolvedUnit) {
+      alert('기타 단위를 직접 입력해주세요.');
+      return;
+    }
+
+    const payload = {
+      ...newSupply,
+      category: newSupply.category || '광물',
+      unit: resolvedUnit,
+      custom_unit: newSupply.unit === '기타' ? resolvedUnit : ''
+    };
+
     try {
       if (editingSupply) {
         await apiRequest(`/supplies/${editingSupply.id}`, {
           method: 'PUT',
-          body: JSON.stringify(newSupply)
+          body: JSON.stringify(payload)
         });
         alert('납품 품목 정보 및 단가 수치가 수정되었습니다.');
       } else {
         await apiRequest('/supplies', {
           method: 'POST',
-          body: JSON.stringify(newSupply)
+          body: JSON.stringify(payload)
         });
         alert('납품 상품이 등록되었습니다.');
       }
       setShowAddModal(false);
       setEditingSupply(null);
-      setNewSupply({ name: '', unit: '개', points_per_unit: 10, credits_per_unit: 100, description: '' });
       loadData();
     } catch (err) {
       alert(err.message);
@@ -184,7 +258,7 @@ export default function SupplyTab({ user, refreshUser }) {
 
   // 자율 / 직접 아이템 & 수량 입력 납품 신청
   const handleAddCustomItemRow = () => {
-    setCustomItems([...customItems, { name: '', amount: 1, unit: '개' }]);
+    setCustomItems([...customItems, { name: '', amount: 1, unit: '개', custom_unit: '' }]);
   };
 
   const handleRemoveCustomItemRow = (idx) => {
@@ -205,6 +279,12 @@ export default function SupplyTab({ user, refreshUser }) {
       alert('납품할 아이템 이름을 최소 1개 이상 입력해주세요.');
       return;
     }
+    for (const it of validItems) {
+      if (it.unit === '기타' && (!it.custom_unit || !it.custom_unit.trim())) {
+        alert(`'${it.name}' 품목의 기타 단위를 직접 입력해주세요.`);
+        return;
+      }
+    }
     if (!customApplyForm.chest_location.trim()) {
       alert('상자의 위치를 입력해주세요.');
       return;
@@ -214,10 +294,17 @@ export default function SupplyTab({ user, refreshUser }) {
       return;
     }
 
+    const normalizedItems = validItems.map(it => ({
+      name: it.name.trim(),
+      amount: Number(it.amount) || 1,
+      unit: it.unit === '기타' ? it.custom_unit.trim() : it.unit,
+      custom_unit: it.unit === '기타' ? it.custom_unit.trim() : ''
+    }));
+
     try {
       const formData = new FormData();
       formData.append('is_custom', '1');
-      formData.append('custom_items_json', JSON.stringify(validItems));
+      formData.append('custom_items_json', JSON.stringify(normalizedItems));
       formData.append('chest_location', customApplyForm.chest_location);
       formData.append('notes', customApplyForm.notes || '');
       formData.append('proof_image', customApplyForm.proof_image);
@@ -229,7 +316,7 @@ export default function SupplyTab({ user, refreshUser }) {
 
       alert(res.message || '직접 입력 납품 신청이 접수되었습니다!');
       setShowCustomApplyModal(false);
-      setCustomItems([{ name: '', amount: 1, unit: '개' }]);
+      setCustomItems([{ name: '', amount: 1, unit: '개', custom_unit: '' }]);
       setCustomApplyForm({ chest_location: '', notes: '', proof_image: null });
       loadData();
     } catch (err) {
@@ -316,6 +403,101 @@ export default function SupplyTab({ user, refreshUser }) {
     }
   };
 
+  const getSupplyCategory = (item) => {
+    return SUPPLY_CATEGORIES.includes(item.category) ? item.category : '광물';
+  };
+
+  const getCategoryCount = (cat) => {
+    if (cat === '전체') return supplies.length;
+    return supplies.filter(it => getSupplyCategory(it) === cat).length;
+  };
+
+  const renderSupplyCard = (item) => {
+    const catName = getSupplyCategory(item);
+    const catStyle = SUPPLY_CATEGORY_STYLE[catName] || SUPPLY_CATEGORY_STYLE['광물'];
+
+    return (
+      <div key={item.id} className="card" style={{ marginBottom: 0, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+              <div style={{ width: 44, height: 44, borderRadius: 'var(--radius-md)', background: 'var(--primary-container)', color: 'var(--on-primary-container)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <Package size={22} color="var(--primary)" />
+              </div>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 4 }}>
+                  <span
+                    className="badge"
+                    style={{
+                      background: catStyle.bg,
+                      color: catStyle.color,
+                      border: `1px solid ${catStyle.border}`,
+                      fontSize: 11,
+                      fontWeight: 700
+                    }}
+                  >
+                    {catStyle.emoji} {catName}
+                  </span>
+                  <span style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>단위: {item.unit}</span>
+                </div>
+                <h3 style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-main)' }}>{item.name}</h3>
+              </div>
+            </div>
+            {canRegisterSupply && (
+              <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                <button
+                  onClick={() => openEditSupplyModal(item)}
+                  style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}
+                  title="품목 및 수치 수정"
+                >
+                  <Edit2 size={14} />
+                </button>
+                <button
+                  onClick={() => handleDeleteSupply(item.id)}
+                  style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}
+                  title="삭제"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            )}
+          </div>
+
+          {item.description && (
+            <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 12, lineHeight: 1.5, whiteSpace: 'pre-line' }}>
+              {item.description}
+            </p>
+          )}
+
+          <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
+            <div className="asset-pill point" style={{ flex: 1, justifyContent: 'center' }}>
+              +{item.points_per_unit.toLocaleString()} P / {item.unit}
+            </div>
+            <div className="asset-pill credit" style={{ flex: 1, justifyContent: 'center' }}>
+              +{item.credits_per_unit.toLocaleString()} C / {item.unit}
+            </div>
+          </div>
+        </div>
+
+        <button
+          className="btn btn-primary"
+          style={{ width: '100%', marginTop: 18 }}
+          onClick={() => {
+            setSelectedSupply(item);
+            setApplyForm({ amount: 1, chest_location: '', notes: '', proof_image: null });
+            setShowApplyModal(true);
+          }}
+        >
+          납품 신청하기
+        </button>
+      </div>
+    );
+  };
+
+  const categoriesToDisplay = selectedCategory === '전체'
+    ? SUPPLY_CATEGORIES.filter(cat => getCategoryCount(cat) > 0)
+    : [selectedCategory];
+
   return (
     <div>
       {/* 납품 공지사항 / 안내문 */}
@@ -341,7 +523,7 @@ export default function SupplyTab({ user, refreshUser }) {
         <div>
           <h2 style={{ fontSize: 20, fontWeight: 700 }}>국가 물자 납품 품목</h2>
           <p style={{ color: 'var(--text-muted)', fontSize: 13, marginTop: 4 }}>
-            지정된 물자를 납품하거나, 목록에 없는 아이템도 <strong>[직접 아이템·수량 입력 납품]</strong> 버튼으로 자유롭게 납품할 수 있습니다.
+            카테고리(광물 / 소모품 / 농산품)별 지정 물자를 납품하거나, 목록에 없는 아이템도 <strong>[직접 아이템·수량 입력 납품]</strong>으로 납품할 수 있습니다.
           </p>
         </div>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
@@ -349,7 +531,7 @@ export default function SupplyTab({ user, refreshUser }) {
             className="btn btn-primary"
             style={{ background: '#059669', border: '1px solid #047857' }}
             onClick={() => {
-              setCustomItems([{ name: '', amount: 1, unit: '개' }]);
+              setCustomItems([{ name: '', amount: 1, unit: '개', custom_unit: '' }]);
               setCustomApplyForm({ chest_location: '', notes: '', proof_image: null });
               setShowCustomApplyModal(true);
             }}
@@ -360,11 +542,7 @@ export default function SupplyTab({ user, refreshUser }) {
           {canRegisterSupply && (
             <button
               className="btn btn-primary"
-              onClick={() => {
-                setEditingSupply(null);
-                setNewSupply({ name: '', unit: '개', points_per_unit: 10, credits_per_unit: 100, description: '' });
-                setShowAddModal(true);
-              }}
+              onClick={() => openCreateSupplyModal()}
             >
               <Plus size={16} /> 지정 납품 품목 등록
             </button>
@@ -372,123 +550,150 @@ export default function SupplyTab({ user, refreshUser }) {
         </div>
       </div>
 
-      {/* 납품 가능한 품목 그리드 */}
-      <div className="grid-3" style={{ marginBottom: 36 }}>
-        {/* 자율 직접 입력 납품 상시 배너 카드 */}
-        <div
-          className="card"
-          style={{
-            marginBottom: 0,
-            display: 'flex',
-            flexDirection: 'column',
-            justifyContent: 'space-between',
-            border: '2px dashed #10b981',
-            background: 'linear-gradient(180deg, #ecfdf5 0%, #ffffff 100%)'
-          }}
-        >
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <div style={{ width: 44, height: 44, borderRadius: 'var(--radius-md)', background: '#d1fae5', color: '#047857', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <Layers size={22} />
-              </div>
-              <div>
-                <h3 style={{ fontSize: 16, fontWeight: 800, color: '#065f46' }}>자율 / 직접 입력 납품</h3>
-                <span style={{ fontSize: 12, color: '#047857', fontWeight: 600 }}>품목 제한 없음 · 다중 아이템 입력 가능</span>
-              </div>
-            </div>
-            <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 12, lineHeight: 1.5 }}>
-              지정된 목록에 없는 아이템이나 여러 종류의 아이템을 한 상자에 담아 한꺼번에 납품할 때 직접 아이템명과 수량을 모두 입력하여 신청하세요!
-            </p>
-            <div style={{ marginTop: 14, fontSize: 12, color: '#047857', background: '#d1fae5', padding: '8px 12px', borderRadius: 8, fontWeight: 600 }}>
-              ✨ 납품 관리자가 확인 후 품목 가치에 맞춰 연방 포인트 & 크레딧을 직접 산정해 지급합니다.
-            </div>
+      {/* 자율 직접 입력 납품 상시 배너 카드 */}
+      <div
+        className="card"
+        style={{
+          marginBottom: 24,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: 16,
+          border: '2px dashed #10b981',
+          background: 'linear-gradient(180deg, #ecfdf5 0%, #ffffff 100%)'
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, flex: '1 1 380px' }}>
+          <div style={{ width: 46, height: 46, borderRadius: 'var(--radius-md)', background: '#d1fae5', color: '#047857', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <Layers size={24} />
           </div>
-
-          <button
-            className="btn btn-success"
-            style={{ width: '100%', marginTop: 18 }}
-            onClick={() => {
-              setCustomItems([{ name: '', amount: 1, unit: '개' }]);
-              setCustomApplyForm({ chest_location: '', notes: '', proof_image: null });
-              setShowCustomApplyModal(true);
-            }}
-          >
-            <ListPlus size={16} /> 직접 아이템 입력하여 납품하기
-          </button>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <h3 style={{ fontSize: 16, fontWeight: 800, color: '#065f46' }}>자율 / 직접 입력 납품</h3>
+              <span style={{ fontSize: 12, color: '#047857', background: '#d1fae5', padding: '2px 8px', borderRadius: 999, fontWeight: 700 }}>
+                품목 제한 없음 · 다중 아이템 & 기타 단위 입력 지원
+              </span>
+            </div>
+            <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 4, lineHeight: 1.5 }}>
+              지정된 목록에 없는 아이템이나 여러 종류의 물자를 한 상자에 담아 납품할 때 직접 아이템명·수량·단위를 입력해 신청하세요!
+            </p>
+          </div>
         </div>
 
-        {supplies.map((item) => (
-          <div key={item.id} className="card" style={{ marginBottom: 0, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                  <div style={{ width: 44, height: 44, borderRadius: 'var(--radius-md)', background: 'var(--primary-container)', color: 'var(--on-primary-container)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <Package size={22} color="var(--primary)" />
-                  </div>
-                  <div>
-                    <h3 style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-main)' }}>{item.name}</h3>
-                    <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>단위: {item.unit}</span>
-                  </div>
-                </div>
-                {canRegisterSupply && (
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    <button
-                      onClick={() => {
-                        setEditingSupply(item);
-                        setNewSupply({
-                          name: item.name,
-                          unit: item.unit || '개',
-                          points_per_unit: item.points_per_unit,
-                          credits_per_unit: item.credits_per_unit,
-                          description: item.description || ''
-                        });
-                        setShowAddModal(true);
-                      }}
-                      style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}
-                      title="품목 및 수치 수정"
-                    >
-                      <Edit2 size={14} />
-                    </button>
-                    <button
-                      onClick={() => handleDeleteSupply(item.id)}
-                      style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}
-                      title="삭제"
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                )}
-              </div>
+        <button
+          className="btn btn-success"
+          onClick={() => {
+            setCustomItems([{ name: '', amount: 1, unit: '개', custom_unit: '' }]);
+            setCustomApplyForm({ chest_location: '', notes: '', proof_image: null });
+            setShowCustomApplyModal(true);
+          }}
+        >
+          <ListPlus size={16} /> 직접 아이템 입력하여 납품하기
+        </button>
+      </div>
 
-              {item.description && (
-                <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 12, lineHeight: 1.5 }}>
-                  {item.description}
-                </p>
-              )}
-
-              <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
-                <div className="asset-pill point" style={{ flex: 1, justifyContent: 'center' }}>
-                  +{item.points_per_unit.toLocaleString()} P / {item.unit}
-                </div>
-                <div className="asset-pill credit" style={{ flex: 1, justifyContent: 'center' }}>
-                  +{item.credits_per_unit.toLocaleString()} C / {item.unit}
-                </div>
-              </div>
-            </div>
-
+      {/* 카테고리 탭 필터 */}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 24 }}>
+        {['전체', ...SUPPLY_CATEGORIES].map((cat) => {
+          const isActive = selectedCategory === cat;
+          const count = getCategoryCount(cat);
+          const catStyle = SUPPLY_CATEGORY_STYLE[cat];
+          return (
             <button
-              className="btn btn-primary"
-              style={{ width: '100%', marginTop: 18 }}
-              onClick={() => {
-                setSelectedSupply(item);
-                setApplyForm({ amount: 1, chest_location: '', notes: '', proof_image: null });
-                setShowApplyModal(true);
+              key={cat}
+              type="button"
+              onClick={() => setSelectedCategory(cat)}
+              className={isActive ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm'}
+              style={{
+                padding: '8px 16px',
+                fontSize: 13,
+                fontWeight: isActive ? 700 : 600,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6
               }}
             >
-              납품 신청하기
+              <span>{catStyle ? `${catStyle.emoji} ${cat}` : `🗂️ 전체`}</span>
+              <span
+                style={{
+                  background: isActive ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.06)',
+                  color: isActive ? '#ffffff' : 'var(--text-secondary)',
+                  padding: '1px 7px',
+                  borderRadius: 999,
+                  fontSize: 11,
+                  fontWeight: 700
+                }}
+              >
+                {count}
+              </span>
             </button>
+          );
+        })}
+      </div>
+
+      {/* 카테고리별 납품 가능한 품목 목록 */}
+      <div style={{ marginBottom: 36 }}>
+        {supplies.length === 0 ? (
+          <div className="card" style={{ padding: 40, textAlign: 'center', color: 'var(--text-muted)' }}>
+            등록된 지정 납품 품목이 없습니다.
           </div>
-        ))}
+        ) : categoriesToDisplay.length === 0 ? (
+          <div className="card" style={{ padding: 40, textAlign: 'center', color: 'var(--text-muted)' }}>
+            등록된 지정 납품 품목이 없습니다.
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 28 }}>
+            {categoriesToDisplay.map((cat) => {
+              const catItems = supplies.filter(it => getSupplyCategory(it) === cat);
+              const catStyle = SUPPLY_CATEGORY_STYLE[cat] || SUPPLY_CATEGORY_STYLE['광물'];
+
+              return (
+                <div key={cat}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, paddingBottom: 8, borderBottom: '2px solid var(--border-color)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <span
+                        className="badge"
+                        style={{
+                          background: catStyle.bg,
+                          color: catStyle.color,
+                          border: `1px solid ${catStyle.border}`,
+                          fontSize: 13,
+                          fontWeight: 800,
+                          padding: '5px 12px'
+                        }}
+                      >
+                        {catStyle.emoji} {cat}
+                      </span>
+                      <span style={{ fontSize: 13, color: 'var(--text-muted)', fontWeight: 600 }}>
+                        총 {catItems.length}개 품목
+                      </span>
+                    </div>
+                    {canRegisterSupply && (
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => openCreateSupplyModal(cat)}
+                      >
+                        <Plus size={13} /> '{cat}' 품목 추가
+                      </button>
+                    )}
+                  </div>
+
+                  {catItems.length === 0 ? (
+                    <div className="card" style={{ padding: 32, textAlign: 'center', color: 'var(--text-muted)', marginBottom: 0 }}>
+                      현재 <strong>[{cat}]</strong> 카테고리에 등록된 납품 품목이 없습니다.
+                    </div>
+                  ) : (
+                    <div className="grid-3">
+                      {catItems.map(item => renderSupplyCard(item))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* 납품 신청 내역 및 심사 목록 */}
@@ -523,141 +728,159 @@ export default function SupplyTab({ user, refreshUser }) {
                   </td>
                 </tr>
               ) : (
-                requests.map((req) => (
-                  <tr key={req.id}>
-                    <td>#{req.id}</td>
-                    <td>
-                      <div>
-                        <span style={{ fontWeight: 600 }}>{req.nickname || req.username}</span>
-                        <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>@{req.username}</div>
-                      </div>
-                    </td>
-                    <td>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                        {req.is_custom === 1 ? (
-                          <span className="badge" style={{ background: '#d1fae5', color: '#065f46', width: 'fit-content', fontSize: 11 }}>
-                            ✍️ 직접 입력 납품
-                          </span>
-                        ) : (
-                          <span className="badge badge-role" style={{ width: 'fit-content', fontSize: 11 }}>
-                            📦 지정 품목
-                          </span>
-                        )}
-                        <span style={{ fontWeight: 700, color: 'var(--text-main)' }}>{req.supply_name}</span>
-                      </div>
-                    </td>
-                    <td>{req.amount} {req.unit}</td>
-                    <td>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 4, color: 'var(--text-secondary)', fontSize: 13 }}>
-                        <MapPin size={14} /> {req.chest_location}
-                      </div>
-                      {req.notes && (
-                        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
-                          메모: {req.notes}
-                        </div>
-                      )}
-                    </td>
-                    <td>
-                      {req.proof_image ? (
-                        <a href={req.proof_image} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: 'var(--primary)', fontSize: 13, textDecoration: 'none', fontWeight: 600 }}>
-                          <Image size={14} /> 캡쳐 보기
-                        </a>
-                      ) : (
-                        <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>없음</span>
-                      )}
-                    </td>
-                    <td>
-                      {req.status === 'approved' ? (
-                        <div style={{ fontSize: 12 }}>
-                          <span style={{ color: 'var(--point-gold)', fontWeight: 700 }}>+{req.points_earned?.toLocaleString() || 0} P</span>
-                          <span style={{ margin: '0 4px', color: '#64748b' }}>|</span>
-                          <span style={{ color: 'var(--point-emerald)', fontWeight: 700 }}>+{req.credits_earned?.toLocaleString() || 0} C</span>
-                        </div>
-                      ) : req.is_custom === 1 ? (
-                        <span style={{ fontSize: 12, color: '#047857', fontWeight: 600 }}>심사 시 관리자 직접 산정</span>
-                      ) : (
-                        <div style={{ fontSize: 12 }}>
-                          <span style={{ color: 'var(--point-gold)', fontWeight: 600 }}>+{(req.amount * req.points_per_unit).toLocaleString()} P</span>
-                          <span style={{ margin: '0 4px', color: '#64748b' }}>|</span>
-                          <span style={{ color: 'var(--point-emerald)', fontWeight: 600 }}>+{(req.amount * req.credits_per_unit).toLocaleString()} C</span>
-                        </div>
-                      )}
-                    </td>
-                    <td>
-                      {req.status === 'pending' && <span className="badge badge-pending">심사 대기중</span>}
-                      {req.status === 'approved' && <span className="badge badge-approved">승인 완료</span>}
-                      {req.status === 'rejected' && <span className="badge badge-rejected">거절됨</span>}
-                      {req.admin_comment && (
-                        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
-                          사유/비고: {req.admin_comment}
-                        </div>
-                      )}
-                    </td>
-                    {canManageSupply && (
+                requests.map((req) => {
+                  const catName = SUPPLY_CATEGORIES.includes(req.supply_category) ? req.supply_category : '광물';
+                  const catStyle = SUPPLY_CATEGORY_STYLE[catName] || SUPPLY_CATEGORY_STYLE['광물'];
+                  return (
+                    <tr key={req.id}>
+                      <td>#{req.id}</td>
                       <td>
-                        {req.status === 'pending' ? (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 210 }}>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 }}>
-                              <div>
-                                <label style={{ fontSize: 10, color: 'var(--text-muted)', display: 'block' }}>지급 포인트(P)</label>
-                                <input
-                                  type="number"
-                                  className="input"
-                                  style={{ padding: '4px 6px', fontSize: 12 }}
-                                  value={reviewPoints[req.id] ?? (req.amount * req.points_per_unit)}
-                                  onChange={(e) => setReviewPoints({ ...reviewPoints, [req.id]: e.target.value })}
-                                />
-                              </div>
-                              <div>
-                                <label style={{ fontSize: 10, color: 'var(--text-muted)', display: 'block' }}>지급 크레딧(C)</label>
-                                <input
-                                  type="number"
-                                  className="input"
-                                  style={{ padding: '4px 6px', fontSize: 12 }}
-                                  value={reviewCredits[req.id] ?? (req.amount * req.credits_per_unit)}
-                                  onChange={(e) => setReviewCredits({ ...reviewCredits, [req.id]: e.target.value })}
-                                />
-                              </div>
+                        <div>
+                          <span style={{ fontWeight: 600 }}>{req.nickname || req.username}</span>
+                          <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>@{req.username}</div>
+                        </div>
+                      </td>
+                      <td>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                          {req.is_custom === 1 ? (
+                            <span className="badge" style={{ background: '#d1fae5', color: '#065f46', width: 'fit-content', fontSize: 11 }}>
+                              ✍️ 직접 입력 납품
+                            </span>
+                          ) : (
+                            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                              <span className="badge badge-role" style={{ width: 'fit-content', fontSize: 11 }}>
+                                📦 지정 품목
+                              </span>
+                              <span
+                                className="badge"
+                                style={{
+                                  background: catStyle.bg,
+                                  color: catStyle.color,
+                                  border: `1px solid ${catStyle.border}`,
+                                  width: 'fit-content',
+                                  fontSize: 11
+                                }}
+                              >
+                                {catStyle.emoji} {catName}
+                              </span>
                             </div>
-                            <input
-                              type="text"
-                              className="input"
-                              placeholder="승인 메모 / 반려 사유 (선택)"
-                              style={{ padding: '4px 8px', fontSize: 12 }}
-                              value={reviewComment[req.id] || ''}
-                              onChange={(e) => setReviewComment({ ...reviewComment, [req.id]: e.target.value })}
-                            />
-                            <div style={{ display: 'flex', gap: 6 }}>
-                              <button className="btn btn-success btn-sm" style={{ flex: 1 }} onClick={() => handleReview(req, 'approved')}>
-                                <CheckCircle size={13} /> 승인
-                              </button>
-                              <button className="btn btn-danger btn-sm" style={{ flex: 1 }} onClick={() => handleReview(req, 'rejected')}>
-                                <XCircle size={13} /> 거절
-                              </button>
-                            </div>
+                          )}
+                          <span style={{ fontWeight: 700, color: 'var(--text-main)' }}>{req.supply_name}</span>
+                        </div>
+                      </td>
+                      <td>{req.amount} {req.unit}</td>
+                      <td>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 4, color: 'var(--text-secondary)', fontSize: 13 }}>
+                          <MapPin size={14} /> {req.chest_location}
+                        </div>
+                        {req.notes && (
+                          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+                            메모: {req.notes}
                           </div>
-                        ) : (
-                          <button
-                            className="btn btn-secondary btn-sm"
-                            onClick={() => {
-                              setEditingRequest(req);
-                              setEditReqForm({
-                                custom_item_name: req.supply_name || '',
-                                amount: req.amount || 1,
-                                chest_location: req.chest_location || '',
-                                points_earned: req.points_earned || 0,
-                                credits_earned: req.credits_earned || 0,
-                                admin_comment: req.admin_comment || ''
-                              });
-                            }}
-                          >
-                            <Edit2 size={12} /> 수치/내역 수정
-                          </button>
                         )}
                       </td>
-                    )}
-                  </tr>
-                ))
+                      <td>
+                        {req.proof_image ? (
+                          <a href={req.proof_image} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: 'var(--primary)', fontSize: 13, textDecoration: 'none', fontWeight: 600 }}>
+                            <Image size={14} /> 캡쳐 보기
+                          </a>
+                        ) : (
+                          <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>없음</span>
+                        )}
+                      </td>
+                      <td>
+                        {req.status === 'approved' ? (
+                          <div style={{ fontSize: 12 }}>
+                            <span style={{ color: 'var(--point-gold)', fontWeight: 700 }}>+{req.points_earned?.toLocaleString() || 0} P</span>
+                            <span style={{ margin: '0 4px', color: '#64748b' }}>|</span>
+                            <span style={{ color: 'var(--point-emerald)', fontWeight: 700 }}>+{req.credits_earned?.toLocaleString() || 0} C</span>
+                          </div>
+                        ) : req.is_custom === 1 ? (
+                          <span style={{ fontSize: 12, color: '#047857', fontWeight: 600 }}>심사 시 관리자 직접 산정</span>
+                        ) : (
+                          <div style={{ fontSize: 12 }}>
+                            <span style={{ color: 'var(--point-gold)', fontWeight: 600 }}>+{(req.amount * req.points_per_unit).toLocaleString()} P</span>
+                            <span style={{ margin: '0 4px', color: '#64748b' }}>|</span>
+                            <span style={{ color: 'var(--point-emerald)', fontWeight: 600 }}>+{(req.amount * req.credits_per_unit).toLocaleString()} C</span>
+                          </div>
+                        )}
+                      </td>
+                      <td>
+                        {req.status === 'pending' && <span className="badge badge-pending">심사 대기중</span>}
+                        {req.status === 'approved' && <span className="badge badge-approved">승인 완료</span>}
+                        {req.status === 'rejected' && <span className="badge badge-rejected">거절됨</span>}
+                        {req.admin_comment && (
+                          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+                            사유/비고: {req.admin_comment}
+                          </div>
+                        )}
+                      </td>
+                      {canManageSupply && (
+                        <td>
+                          {req.status === 'pending' ? (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 210 }}>
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 }}>
+                                <div>
+                                  <label style={{ fontSize: 10, color: 'var(--text-muted)', display: 'block' }}>지급 포인트(P)</label>
+                                  <input
+                                    type="number"
+                                    className="input"
+                                    style={{ padding: '4px 6px', fontSize: 12 }}
+                                    value={reviewPoints[req.id] ?? (req.amount * req.points_per_unit)}
+                                    onChange={(e) => setReviewPoints({ ...reviewPoints, [req.id]: e.target.value })}
+                                  />
+                                </div>
+                                <div>
+                                  <label style={{ fontSize: 10, color: 'var(--text-muted)', display: 'block' }}>지급 크레딧(C)</label>
+                                  <input
+                                    type="number"
+                                    className="input"
+                                    style={{ padding: '4px 6px', fontSize: 12 }}
+                                    value={reviewCredits[req.id] ?? (req.amount * req.credits_per_unit)}
+                                    onChange={(e) => setReviewCredits({ ...reviewCredits, [req.id]: e.target.value })}
+                                  />
+                                </div>
+                              </div>
+                              <input
+                                type="text"
+                                className="input"
+                                placeholder="승인 메모 / 반려 사유 (선택)"
+                                style={{ padding: '4px 8px', fontSize: 12 }}
+                                value={reviewComment[req.id] || ''}
+                                onChange={(e) => setReviewComment({ ...reviewComment, [req.id]: e.target.value })}
+                              />
+                              <div style={{ display: 'flex', gap: 6 }}>
+                                <button className="btn btn-success btn-sm" style={{ flex: 1 }} onClick={() => handleReview(req, 'approved')}>
+                                  <CheckCircle size={13} /> 승인
+                                </button>
+                                <button className="btn btn-danger btn-sm" style={{ flex: 1 }} onClick={() => handleReview(req, 'rejected')}>
+                                  <XCircle size={13} /> 거절
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => {
+                                setEditingRequest(req);
+                                setEditReqForm({
+                                  custom_item_name: req.supply_name || '',
+                                  amount: req.amount || 1,
+                                  chest_location: req.chest_location || '',
+                                  points_earned: req.points_earned || 0,
+                                  credits_earned: req.credits_earned || 0,
+                                  admin_comment: req.admin_comment || ''
+                                });
+                              }}
+                            >
+                              <Edit2 size={12} /> 수치/내역 수정
+                            </button>
+                          )}
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -669,7 +892,7 @@ export default function SupplyTab({ user, refreshUser }) {
         <div className="modal-overlay">
           <div className="modal-content">
             <h2 style={{ fontSize: 18, fontWeight: 700, marginBottom: 16 }}>
-              📦 [{selectedSupply.name}] 납품 신청
+              📦 [{selectedSupply.category || '광물'}] {selectedSupply.name} 납품 신청
             </h2>
             <form onSubmit={handleApplySupply}>
               <div className="form-group">
@@ -737,13 +960,13 @@ export default function SupplyTab({ user, refreshUser }) {
       {/* 자율 / 직접 아이템 & 수량 입력 납품 모달 */}
       {showCustomApplyModal && (
         <div className="modal-overlay">
-          <div className="modal-content" style={{ maxWidth: 640 }}>
+          <div className="modal-content" style={{ maxWidth: 680 }}>
             <h2 style={{ fontSize: 18, fontWeight: 700, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
               <ListPlus color="#059669" size={22} />
               <span>직접 아이템 및 수량 입력 납품 신청</span>
             </h2>
             <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 18 }}>
-              등록된 목록에 없는 아이템이거나 여러 종류의 물자를 동시에 납품할 때 아이템 이름과 수량들을 직접 입력하여 신청할 수 있습니다.
+              등록된 목록에 없는 아이템이거나 여러 종류의 물자를 동시에 납품할 때 아이템 이름과 수량·단위를 직접 입력하여 신청할 수 있습니다.
             </p>
 
             <form onSubmit={handleSubmitCustomSupply}>
@@ -761,7 +984,15 @@ export default function SupplyTab({ user, refreshUser }) {
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                   {customItems.map((row, idx) => (
-                    <div key={idx} style={{ display: 'grid', gridTemplateColumns: '1fr 110px 120px auto', gap: 8, alignItems: 'center' }}>
+                    <div
+                      key={idx}
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: row.unit === '기타' ? '1fr 90px 125px 120px auto' : '1fr 110px 135px auto',
+                        gap: 8,
+                        alignItems: 'center'
+                      }}
+                    >
                       <input
                         type="text"
                         className="input"
@@ -789,7 +1020,18 @@ export default function SupplyTab({ user, refreshUser }) {
                         <option value="상자">상자 (단일)</option>
                         <option value="큰상자">큰상자 (더블)</option>
                         <option value="셜커상자">셜커상자</option>
+                        <option value="기타">기타 (직접 입력)</option>
                       </select>
+                      {row.unit === '기타' && (
+                        <input
+                          type="text"
+                          className="input"
+                          placeholder="단위 직접 입력"
+                          value={row.custom_unit || ''}
+                          onChange={(e) => handleChangeCustomItem(idx, 'custom_unit', e.target.value)}
+                          required
+                        />
+                      )}
                       {customItems.length > 1 && (
                         <button
                           type="button"
@@ -939,30 +1181,61 @@ export default function SupplyTab({ user, refreshUser }) {
               {editingSupply ? '납품 품목 및 단가 수치 수정' : '새 지정 납품 품목 등록'}
             </h2>
             <form onSubmit={handleSaveSupply}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <div className="form-group">
+                  <label className="form-label">카테고리</label>
+                  <select
+                    className="select"
+                    value={newSupply.category}
+                    onChange={(e) => setNewSupply({ ...newSupply, category: e.target.value })}
+                  >
+                    {SUPPLY_CATEGORIES.map((cat) => (
+                      <option key={cat} value={cat}>{cat}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">단위</label>
+                  <select
+                    className="select"
+                    value={newSupply.unit}
+                    onChange={(e) => setNewSupply({ ...newSupply, unit: e.target.value })}
+                  >
+                    <option value="개">개</option>
+                    <option value="세트">세트 (64개)</option>
+                    <option value="상자">상자 (단일)</option>
+                    <option value="큰상자">큰상자 (더블)</option>
+                    <option value="셜커상자">셜커상자</option>
+                    <option value="기타">기타 (직접 입력)</option>
+                  </select>
+                </div>
+              </div>
+
+              {newSupply.unit === '기타' && (
+                <div className="form-group">
+                  <label className="form-label">기타 단위 직접 입력</label>
+                  <input
+                    type="text"
+                    className="input"
+                    placeholder="예: 블록, 묶음, 세트(16개), 인벤토리, 더블상자 등"
+                    value={newSupply.custom_unit}
+                    onChange={(e) => setNewSupply({ ...newSupply, custom_unit: e.target.value })}
+                    required
+                  />
+                </div>
+              )}
+
               <div className="form-group">
                 <label className="form-label">상품명</label>
                 <input
                   type="text"
                   className="input"
-                  placeholder="예: 철 주괴, 옵시디언, 금 블록 등"
+                  placeholder="예: 철 주괴, 옵시디언, 황금 사과, 밀 블록 등"
                   value={newSupply.name}
                   onChange={(e) => setNewSupply({ ...newSupply, name: e.target.value })}
                   required
                 />
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">단위</label>
-                <select
-                  className="select"
-                  value={newSupply.unit}
-                  onChange={(e) => setNewSupply({ ...newSupply, unit: e.target.value })}
-                >
-                  <option value="개">개</option>
-                  <option value="세트">세트 (64개)</option>
-                  <option value="상자">상자</option>
-                  <option value="셜커상자">셜커상자</option>
-                </select>
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>

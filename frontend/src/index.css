@@ -1,4 +1,5 @@
-@import url('https://fonts.googleapis.com/css2?family=Pretendard:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap');
+@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap');
 
 :root {
   /* Material 3 Light Theme Palette */
@@ -77,12 +78,17 @@
 }
 
 body {
-  font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: 'Pretendard Variable', 'Pretendard', -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', '맑은 고딕', 'Segoe UI', Roboto, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji', sans-serif;
   background-color: var(--bg-primary);
   color: var(--text-main);
   min-height: 100vh;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  -webkit-text-size-adjust: 100%;
+  word-break: keep-all;
+  overflow-wrap: break-word;
   letter-spacing: -0.2px;
 }
 
@@ -455,6 +461,7 @@ body {
 /* M3 Table */
 .table-container {
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
   border-radius: var(--radius-md);
   border: 1px solid var(--border-color);
   background: #ffffff;
@@ -466,17 +473,20 @@ body {
   font-size: 14px;
 }
 .table th {
-  padding: 13px 18px;
+  padding: 13px 16px;
   color: var(--text-secondary);
   font-weight: 700;
   border-bottom: 1px solid var(--border-color);
   background: #f8f9fa;
+  white-space: nowrap;
+  word-break: keep-all;
 }
 .table td {
-  padding: 14px 18px;
+  padding: 14px 16px;
   border-bottom: 1px solid var(--border-subtle);
   vertical-align: middle;
   color: var(--text-main);
+  word-break: keep-all;
 }
 .table tr:last-child td {
   border-bottom: none;
@@ -494,6 +504,59 @@ body {
   border-radius: var(--radius-pill);
   font-size: 12px;
   font-weight: 600;
+  white-space: nowrap;
+  line-height: 1.3;
+  flex-shrink: 0;
+}
+
+/* Ranking Layout & Cross-Browser Typography Helpers */
+.ranking-podium-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.18fr) minmax(0, 1fr);
+  gap: 16px;
+  margin-bottom: 26px;
+  align-items: stretch;
+}
+@media (max-width: 860px) {
+  .ranking-podium-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.ranking-podium-card {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  text-align: center;
+  margin-bottom: 0 !important;
+}
+.ranking-player-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.35;
+}
+.ranking-table {
+  min-width: 780px;
+}
+.ranking-num {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.ranking-activity-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 .badge-pending {
   background: var(--warning-container);

@@ -830,18 +830,25 @@ app.get('/api/supplies', authenticateToken, (req, res) => {
 });
 
 app.post('/api/supplies', authenticateToken, requireRole(['납품 등록', '납품 관리']), (req, res) => {
-  const { name, unit, points_per_unit, credits_per_unit, description } = req.body;
+  const { name, category, unit, custom_unit, points_per_unit, credits_per_unit, description } = req.body;
   if (!name) return res.status(400).json({ error: '상품명을 입력해주세요.' });
 
+  const finalCategory = (category && String(category).trim()) || '광물';
+  if (unit === '기타' && (!custom_unit || !String(custom_unit).trim())) {
+    return res.status(400).json({ error: '기타 단위를 직접 입력해주세요.' });
+  }
+  const finalUnit = (unit === '기타' ? String(custom_unit).trim() : (unit && String(unit).trim())) || '개';
+
   const result = db.prepare(`
-    INSERT INTO supplies (name, unit, points_per_unit, credits_per_unit, description, created_by)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(name, unit || '개', Number(points_per_unit) || 0, Number(credits_per_unit) || 0, description || '', req.user.id);
+    INSERT INTO supplies (name, category, unit, points_per_unit, credits_per_unit, description, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(name, finalCategory, finalUnit, Number(points_per_unit) || 0, Number(credits_per_unit) || 0, description || '', req.user.id);
 
   sendDiscordWebhook('supply_item_created', {
     id: result.lastInsertRowid,
     name,
-    unit: unit || '개',
+    category: finalCategory,
+    unit: finalUnit,
     points_per_unit: Number(points_per_unit) || 0,
     credits_per_unit: Number(credits_per_unit) || 0,
     description: description || '',
@@ -852,14 +859,20 @@ app.post('/api/supplies', authenticateToken, requireRole(['납품 등록', '납�
 });
 
 app.put('/api/supplies/:id', authenticateToken, requireRole(['납품 등록', '납품 관리']), (req, res) => {
-  const { name, unit, points_per_unit, credits_per_unit, description } = req.body;
+  const { name, category, unit, custom_unit, points_per_unit, credits_per_unit, description } = req.body;
   if (!name) return res.status(400).json({ error: '상품명을 입력해주세요.' });
+
+  const finalCategory = (category && String(category).trim()) || '광물';
+  if (unit === '기타' && (!custom_unit || !String(custom_unit).trim())) {
+    return res.status(400).json({ error: '기타 단위를 직접 입력해주세요.' });
+  }
+  const finalUnit = (unit === '기타' ? String(custom_unit).trim() : (unit && String(unit).trim())) || '개';
 
   db.prepare(`
     UPDATE supplies
-    SET name = ?, unit = ?, points_per_unit = ?, credits_per_unit = ?, description = ?
+    SET name = ?, category = ?, unit = ?, points_per_unit = ?, credits_per_unit = ?, description = ?
     WHERE id = ?
-  `).run(name, unit || '개', Number(points_per_unit) || 0, Number(credits_per_unit) || 0, description || '', req.params.id);
+  `).run(name, finalCategory, finalUnit, Number(points_per_unit) || 0, Number(credits_per_unit) || 0, description || '', req.params.id);
 
   res.json({ message: '납품 품목 정보 및 단가 수치가 수정되었습니다.' });
 });
@@ -876,6 +889,7 @@ app.get('/api/supplies/requests', authenticateToken, (req, res) => {
     list = db.prepare(`
       SELECT sr.*,
              COALESCE(s.name, sr.custom_item_name, '자율 납품 품목') as supply_name,
+             COALESCE(s.category, '자율 납품') as supply_category,
              COALESCE(s.unit, sr.custom_unit, '개') as unit,
              COALESCE(s.points_per_unit, 0) as points_per_unit,
              COALESCE(s.credits_per_unit, 0) as credits_per_unit,
@@ -889,6 +903,7 @@ app.get('/api/supplies/requests', authenticateToken, (req, res) => {
     list = db.prepare(`
       SELECT sr.*,
              COALESCE(s.name, sr.custom_item_name, '자율 납품 품목') as supply_name,
+             COALESCE(s.category, '자율 납품') as supply_category,
              COALESCE(s.unit, sr.custom_unit, '개') as unit,
              COALESCE(s.points_per_unit, 0) as points_per_unit,
              COALESCE(s.credits_per_unit, 0) as credits_per_unit,
@@ -932,9 +947,15 @@ app.post('/api/supplies/requests', authenticateToken, upload.single('proof_image
       if (validItems.length === 0) {
         return res.status(400).json({ error: '납품할 아이템 이름을 최소 1개 이상 입력해주세요.' });
       }
-      summaryName = validItems.map(it => `${it.name.trim()} (${it.amount || 1}${it.unit || '개'})`).join(', ');
+      for (const it of validItems) {
+        if (it.unit === '기타' && (!it.custom_unit || !String(it.custom_unit).trim())) {
+          return res.status(400).json({ error: `'${it.name}' 품목의 기타 단위를 직접 입력해주세요.` });
+        }
+      }
+      const resolveItemUnit = (it) => (it.unit === '기타' ? String(it.custom_unit || '').trim() : String(it.unit || '').trim()) || '개';
+      summaryName = validItems.map(it => `${it.name.trim()} (${it.amount || 1}${resolveItemUnit(it)})`).join(', ');
       totalAmount = validItems.reduce((acc, it) => acc + (Number(it.amount) || 1), 0);
-      mainUnit = validItems.length === 1 ? (validItems[0].unit || '개') : '종(합산)';
+      mainUnit = validItems.length === 1 ? resolveItemUnit(validItems[0]) : '종(합산)';
     } else if (!summaryName.trim()) {
       return res.status(400).json({ error: '직접 납품할 아이템 이름과 수량을 입력해주세요.' });
     }
@@ -1284,7 +1305,7 @@ app.get('/api/ranking', authenticateToken, (req, res) => {
         COALESCE(usp.is_hidden, 0) as is_hidden,
         (SELECT COUNT(*) FROM supply_requests sr WHERE sr.user_id = u.id AND sr.status = 'approved') as supply_count,
         (SELECT COUNT(*) FROM quest_submissions qs WHERE qs.user_id = u.id AND qs.status = 'approved') as quest_count,
-        (SELECT COUNT(*) FROM part_time_jobs pj WHERE pj.worker_id = u.id AND pj.status = 'completed') as job_count
+        (SELECT COUNT(*) FROM part_time_jobs pj WHERE pj.status = 'completed' AND (pj.worker_id = u.id OR pj.workers_json LIKE '%"user_id":' || u.id || ',%' OR pj.workers_json LIKE '%"user_id":' || u.id || '}%')) as job_count
       FROM users u
       LEFT JOIN user_season_points usp ON u.id = usp.user_id AND usp.season_id = ?
       WHERE u.status = 'approved'
@@ -1306,7 +1327,7 @@ app.get('/api/ranking', authenticateToken, (req, res) => {
         COALESCE(usp.is_hidden, 0) as is_hidden,
         (SELECT COUNT(*) FROM supply_requests sr WHERE sr.user_id = u.id AND sr.status = 'approved') as supply_count,
         (SELECT COUNT(*) FROM quest_submissions qs WHERE qs.user_id = u.id AND qs.status = 'approved') as quest_count,
-        (SELECT COUNT(*) FROM part_time_jobs pj WHERE pj.worker_id = u.id AND pj.status = 'completed') as job_count
+        (SELECT COUNT(*) FROM part_time_jobs pj WHERE pj.status = 'completed' AND (pj.worker_id = u.id OR pj.workers_json LIKE '%"user_id":' || u.id || ',%' OR pj.workers_json LIKE '%"user_id":' || u.id || '}%')) as job_count
       FROM users u
       LEFT JOIN user_season_points usp ON u.id = usp.user_id AND usp.season_id = ?
       WHERE u.status = 'approved'
@@ -1357,8 +1378,8 @@ app.get('/api/ranking/me', authenticateToken, (req, res) => {
     SELECT
       (SELECT COUNT(*) FROM supply_requests WHERE user_id = ? AND status = 'approved') as supply_count,
       (SELECT COUNT(*) FROM quest_submissions WHERE user_id = ? AND status = 'approved') as quest_count,
-      (SELECT COUNT(*) FROM part_time_jobs WHERE worker_id = ? AND status = 'completed') as job_count
-  `).get(req.user.id, req.user.id, req.user.id);
+      (SELECT COUNT(*) FROM part_time_jobs WHERE status = 'completed' AND (worker_id = ? OR workers_json LIKE '%"user_id":' || ? || ',%' OR workers_json LIKE '%"user_id":' || ? || '}%')) as job_count
+  `).get(req.user.id, req.user.id, req.user.id, req.user.id, req.user.id);
 
   res.json({
     points: myPoints,
@@ -1781,24 +1802,38 @@ app.get('/api/shop/items', authenticateToken, (req, res) => {
 });
 
 app.post('/api/shop/items', authenticateToken, requireRole('샵 관리'), (req, res) => {
-  const { name, price, stock, description, image_url } = req.body;
+  const { name, category, unit, custom_unit, price, stock, description, image_url } = req.body;
   if (!name || price == null) return res.status(400).json({ error: '상품명과 가격을 입력해주세요.' });
 
+  const finalCategory = (category && String(category).trim()) || '일상, 전투 아이템';
+  if (unit === '기타' && (!custom_unit || !String(custom_unit).trim())) {
+    return res.status(400).json({ error: '기타 단위를 직접 입력해주세요.' });
+  }
+  const finalUnit = (unit === '기타' ? String(custom_unit).trim() : (unit && String(unit).trim())) || '개';
+
   const result = db.prepare(`
-    INSERT INTO shop_items (name, price, stock, description, image_url)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(name, Number(price), stock == null ? -1 : Number(stock), description || '', image_url || '');
+    INSERT INTO shop_items (name, category, unit, price, stock, description, image_url)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(name, finalCategory, finalUnit, Number(price), stock == null ? -1 : Number(stock), description || '', image_url || '');
 
   res.json({ message: '상품이 등록되었습니다.', id: result.lastInsertRowid });
 });
 
 app.put('/api/shop/items/:id', authenticateToken, requireRole('샵 관리'), (req, res) => {
-  const { name, price, stock, description, image_url } = req.body;
+  const { name, category, unit, custom_unit, price, stock, description, image_url } = req.body;
+  if (!name || price == null) return res.status(400).json({ error: '상품명과 가격을 입력해주세요.' });
+
+  const finalCategory = (category && String(category).trim()) || '일상, 전투 아이템';
+  if (unit === '기타' && (!custom_unit || !String(custom_unit).trim())) {
+    return res.status(400).json({ error: '기타 단위를 직접 입력해주세요.' });
+  }
+  const finalUnit = (unit === '기타' ? String(custom_unit).trim() : (unit && String(unit).trim())) || '개';
+
   db.prepare(`
     UPDATE shop_items
-    SET name = ?, price = ?, stock = ?, description = ?, image_url = ?
+    SET name = ?, category = ?, unit = ?, price = ?, stock = ?, description = ?, image_url = ?
     WHERE id = ?
-  `).run(name, Number(price), Number(stock), description || '', image_url || '', req.params.id);
+  `).run(name, finalCategory, finalUnit, Number(price), Number(stock), description || '', image_url || '', req.params.id);
 
   res.json({ message: '상품 정보가 수정되었습니다.' });
 });
@@ -1827,12 +1862,15 @@ app.post('/api/shop/purchase', authenticateToken, (req, res) => {
     VALUES (?, ?, ?, ?, 'pending')
   `).run(req.user.id, item.id, item.name, item.price);
 
+  const itemCategory = item.category || '일상, 전투 아이템';
+  const itemUnit = item.unit || '개';
+
   recordAssetTransaction({
     userId: req.user.id,
     assetType: 'POINT',
     amount: -item.price,
     category: '포인트 상점 구매',
-    description: `[상점 주문 #${result.lastInsertRowid}] '${item.name}' 아이템 구매`,
+    description: `[상점 주문 #${result.lastInsertRowid}] [${itemCategory}] '${item.name}' (1${itemUnit}) 구매`,
     referenceType: 'shop_order',
     referenceId: result.lastInsertRowid,
     actor: req.user,
@@ -1845,6 +1883,8 @@ app.post('/api/shop/purchase', authenticateToken, (req, res) => {
     user_name: req.user.nickname || req.user.username,
     username: req.user.username,
     item_name: item.name,
+    category: itemCategory,
+    unit: itemUnit,
     points_spent: item.price,
     remaining_points: beforePts - item.price
   });
@@ -1857,15 +1897,23 @@ app.get('/api/shop/orders', authenticateToken, (req, res) => {
   let orders;
   if (canManage) {
     orders = db.prepare(`
-      SELECT o.*, u.username, u.nickname
+      SELECT o.*,
+             COALESCE(si.category, '일상, 전투 아이템') as item_category,
+             COALESCE(si.unit, '개') as item_unit,
+             u.username, u.nickname
       FROM shop_orders o
+      LEFT JOIN shop_items si ON o.item_id = si.id
       JOIN users u ON o.user_id = u.id
       ORDER BY o.id DESC
     `).all();
   } else {
     orders = db.prepare(`
-      SELECT o.*, u.username, u.nickname
+      SELECT o.*,
+             COALESCE(si.category, '일상, 전투 아이템') as item_category,
+             COALESCE(si.unit, '개') as item_unit,
+             u.username, u.nickname
       FROM shop_orders o
+      LEFT JOIN shop_items si ON o.item_id = si.id
       JOIN users u ON o.user_id = u.id
       WHERE o.user_id = ?
       ORDER BY o.id DESC
@@ -1967,6 +2015,40 @@ app.put('/api/shop/orders/:id/cancel', authenticateToken, (req, res) => {
 });
 
 // --- 단기 알바 ---
+function parseJobWorkers(job) {
+  let workers = [];
+  try {
+    if (job.workers_json) {
+      const parsed = JSON.parse(job.workers_json);
+      if (Array.isArray(parsed)) workers = parsed;
+    }
+  } catch (_) {}
+
+  if (workers.length === 0 && job.worker_id) {
+    const wu = db.prepare('SELECT id, username, nickname FROM users WHERE id = ?').get(job.worker_id);
+    workers = [{
+      user_id: job.worker_id,
+      username: wu?.username || job.worker_username || '',
+      nickname: wu?.nickname || job.worker_name || wu?.username || `#${job.worker_id}`,
+      worker_completed: job.worker_completed ? 1 : 0,
+      employer_completed: job.employer_completed ? 1 : 0,
+      applied_at: job.created_at
+    }];
+  } else if (workers.length > 0) {
+    workers = workers.map(w => {
+      const wu = db.prepare('SELECT id, username, nickname FROM users WHERE id = ?').get(w.user_id);
+      return {
+        ...w,
+        username: wu?.username || w.username || '',
+        nickname: wu?.nickname || w.nickname || wu?.username || `#${w.user_id}`,
+        worker_completed: w.worker_completed ? 1 : 0,
+        employer_completed: w.employer_completed ? 1 : (job.employer_completed ? 1 : 0)
+      };
+    });
+  }
+  return workers;
+}
+
 app.get('/api/jobs', authenticateToken, (req, res) => {
   const jobs = db.prepare(`
     SELECT j.*, eu.nickname as employer_name, eu.username as employer_username,
@@ -1976,23 +2058,37 @@ app.get('/api/jobs', authenticateToken, (req, res) => {
     LEFT JOIN users wu ON j.worker_id = wu.id
     ORDER BY j.id DESC
   `).all();
-  res.json(jobs);
+
+  const enriched = jobs.map(j => {
+    const workers = parseJobWorkers(j);
+    const maxWorkers = Math.max(1, Number(j.max_workers) || 1);
+    return {
+      ...j,
+      max_workers: maxWorkers,
+      workers,
+      worker_count: workers.length,
+      worker_name: workers.length > 0 ? workers.map(w => w.nickname || w.username).join(', ') : (j.worker_name || null)
+    };
+  });
+
+  res.json(enriched);
 });
 
 app.post('/api/jobs', authenticateToken, requireRole(['사업가', '기업 관리']), (req, res) => {
-  const { work_type, custom_work_type, description, pay_credit, work_date, duration_text, notes, federation_points } = req.body;
+  const { work_type, custom_work_type, description, pay_credit, max_workers, work_date, duration_text, notes, federation_points } = req.body;
   if (!work_type || !description || pay_credit == null || !work_date || !duration_text) {
     return res.status(400).json({ error: '필수 알바 항목들을 모두 입력해주세요.' });
   }
 
   const canManageCorp = req.user.is_admin === 1 || req.user.roleList.includes('기업 관리');
   const initialFedPts = canManageCorp && federation_points !== undefined ? Number(federation_points) || 0 : 0;
+  const maxWorkers = Math.max(1, Math.floor(Number(max_workers) || 1));
 
   const result = db.prepare(`
     INSERT INTO part_time_jobs (
       employer_id, work_type, custom_work_type, description, pay_credit, federation_points,
-      work_date, duration_text, notes, status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_approval')
+      max_workers, workers_json, work_date, duration_text, notes, status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, 'pending_approval')
   `).run(
     req.user.id,
     work_type,
@@ -2000,6 +2096,7 @@ app.post('/api/jobs', authenticateToken, requireRole(['사업가', '기업 관�
     description,
     Number(pay_credit),
     initialFedPts,
+    maxWorkers,
     work_date,
     duration_text,
     notes || null
@@ -2008,9 +2105,11 @@ app.post('/api/jobs', authenticateToken, requireRole(['사업가', '기업 관�
   sendDiscordWebhook('job_request', {
     id: result.lastInsertRowid,
     employer_name: req.user.nickname || req.user.username,
+    employer_username: req.user.username,
     work_type: work_type === '기타' && custom_work_type ? custom_work_type : work_type,
     description,
     pay_credit: Number(pay_credit),
+    max_workers: maxWorkers,
     work_date,
     duration_text,
     notes: notes || ''
@@ -2020,14 +2119,23 @@ app.post('/api/jobs', authenticateToken, requireRole(['사업가', '기업 관�
 });
 
 app.put('/api/jobs/:id/approve', authenticateToken, requireRole('기업 관리'), async (req, res) => {
-  const { federation_points } = req.body;
+  const { federation_points, max_workers } = req.body;
   const points = Number(federation_points) || 0;
 
-  db.prepare(`
-    UPDATE part_time_jobs
-    SET federation_points = ?, status = 'open', approved_by = ?
-    WHERE id = ?
-  `).run(points, req.user.id, req.params.id);
+  if (max_workers !== undefined && max_workers !== null && max_workers !== '') {
+    const mw = Math.max(1, Math.floor(Number(max_workers) || 1));
+    db.prepare(`
+      UPDATE part_time_jobs
+      SET federation_points = ?, max_workers = ?, status = 'open', approved_by = ?
+      WHERE id = ?
+    `).run(points, mw, req.user.id, req.params.id);
+  } else {
+    db.prepare(`
+      UPDATE part_time_jobs
+      SET federation_points = ?, status = 'open', approved_by = ?
+      WHERE id = ?
+    `).run(points, req.user.id, req.params.id);
+  }
 
   const job = db.prepare(`
     SELECT j.*, u.nickname as employer_name
@@ -2039,6 +2147,7 @@ app.put('/api/jobs/:id/approve', authenticateToken, requireRole('기업 관리')
   if (job) {
     sendDiscordWebhook('part_time_job', {
       ...job,
+      max_workers: Math.max(1, Number(job.max_workers) || 1),
       work_type: job.work_type === '기타' && job.custom_work_type ? job.custom_work_type : job.work_type
     });
   }
@@ -2049,74 +2158,121 @@ app.put('/api/jobs/:id/approve', authenticateToken, requireRole('기업 관리')
 app.post('/api/jobs/:id/apply', authenticateToken, (req, res) => {
   const job = db.prepare('SELECT * FROM part_time_jobs WHERE id = ?').get(req.params.id);
   if (!job) return res.status(404).json({ error: '알바를 찾을 수 없습니다.' });
-  if (job.status !== 'open') return res.status(400).json({ error: '모집 중인 알바가 아닙니다.' });
   if (job.employer_id === req.user.id) return res.status(400).json({ error: '본인이 등록한 알바에는 지원할 수 없습니다.' });
 
-  db.prepare("UPDATE part_time_jobs SET worker_id = ?, status = 'in_progress' WHERE id = ?").run(req.user.id, req.params.id);
+  const workers = parseJobWorkers(job);
+  const maxWorkers = Math.max(1, Number(job.max_workers) || 1);
+
+  if (workers.some(w => Number(w.user_id) === req.user.id)) {
+    return res.status(400).json({ error: '이미 지원한 알바입니다.' });
+  }
+  if (job.status !== 'open' && !(job.status === 'in_progress' && workers.length < maxWorkers)) {
+    return res.status(400).json({ error: '모집 중인 알바가 아닙니다.' });
+  }
+  if (workers.length >= maxWorkers) {
+    return res.status(400).json({ error: `모집 정원(${maxWorkers}명)이 모두 마감되었습니다.` });
+  }
+
+  workers.push({
+    user_id: req.user.id,
+    username: req.user.username,
+    nickname: req.user.nickname || req.user.username,
+    worker_completed: 0,
+    employer_completed: 0,
+    applied_at: new Date().toISOString()
+  });
+
+  const nextStatus = workers.length >= maxWorkers ? 'in_progress' : 'open';
+  const primaryWorkerId = job.worker_id || req.user.id;
+
+  db.prepare(`
+    UPDATE part_time_jobs
+    SET worker_id = ?, workers_json = ?, worker_completed = 0, status = ?
+    WHERE id = ?
+  `).run(primaryWorkerId, JSON.stringify(workers), nextStatus, req.params.id);
 
   const employer = db.prepare('SELECT username, nickname FROM users WHERE id = ?').get(job.employer_id);
   sendDiscordWebhook('job_progress', {
     id: job.id,
-    action_label: '구직자 지원 및 작업 착수',
+    job_id: job.id,
+    action_label: `구직자 지원 및 채용 (${workers.length}/${maxWorkers}명)`,
+    stage_label: `구직자 지원 (${workers.length}/${maxWorkers}명)`,
     work_type: job.work_type === '기타' && job.custom_work_type ? job.custom_work_type : job.work_type,
     employer_name: employer ? (employer.nickname || employer.username) : `#${job.employer_id}`,
     worker_name: req.user.nickname || req.user.username,
+    actor_name: `${req.user.nickname || req.user.username} (@${req.user.username})`,
     pay_credit: job.pay_credit,
     federation_points: job.federation_points,
-    status_label: '작업 진행중 (in_progress)'
+    status_label: nextStatus === 'in_progress' ? `모집 마감 · 작업 진행중 (${workers.length}/${maxWorkers}명)` : `추가 모집중 · 작업 진행 (${workers.length}/${maxWorkers}명)`
   });
 
-  res.json({ message: '알바에 지원 및 채용되었습니다! 작업을 시작하세요.' });
+  res.json({ message: `알바에 지원 및 채용되었습니다! (${workers.length}/${maxWorkers}명) 작업을 시작하세요.` });
 });
 
 app.post('/api/jobs/:id/complete', authenticateToken, (req, res) => {
   const job = db.prepare('SELECT * FROM part_time_jobs WHERE id = ?').get(req.params.id);
   if (!job) return res.status(404).json({ error: '알바를 찾을 수 없습니다.' });
 
+  let workers = parseJobWorkers(job);
   let employerCompleted = job.employer_completed;
   let workerCompleted = job.worker_completed;
 
-  if (job.employer_id === req.user.id) {
+  const isEmployer = job.employer_id === req.user.id;
+  const workerIdx = workers.findIndex(w => Number(w.user_id) === req.user.id);
+
+  if (isEmployer) {
+    if (workers.length === 0) {
+      return res.status(400).json({ error: '아직 지원한 구직자가 없습니다.' });
+    }
     employerCompleted = 1;
-  } else if (job.worker_id === req.user.id) {
-    workerCompleted = 1;
+    workers = workers.map(w => ({ ...w, employer_completed: 1 }));
+  } else if (workerIdx !== -1) {
+    workers[workerIdx].worker_completed = 1;
   } else {
-    return res.status(403).json({ error: '해당 알바의 고용주 또는 구직자만 완료할 수 있습니다.' });
+    return res.status(403).json({ error: '해당 알바의 고용주 또는 채용된 구직자만 완료할 수 있습니다.' });
   }
+
+  const allWorkersDone = workers.length > 0 && workers.every(w => w.worker_completed === 1);
+  workerCompleted = allWorkersDone ? 1 : 0;
 
   let newStatus = job.status;
   if (employerCompleted === 1 && workerCompleted === 1) {
     newStatus = 'both_done_pending_review';
+  } else if (newStatus === 'open' && allWorkersDone) {
+    newStatus = 'in_progress';
   }
 
   db.prepare(`
     UPDATE part_time_jobs
-    SET employer_completed = ?, worker_completed = ?, status = ?
+    SET employer_completed = ?, worker_completed = ?, workers_json = ?, status = ?
     WHERE id = ?
-  `).run(employerCompleted, workerCompleted, newStatus, req.params.id);
+  `).run(employerCompleted, workerCompleted, JSON.stringify(workers), newStatus, req.params.id);
 
   const employer = db.prepare('SELECT username, nickname FROM users WHERE id = ?').get(job.employer_id);
-  const worker = job.worker_id ? db.prepare('SELECT username, nickname FROM users WHERE id = ?').get(job.worker_id) : null;
+  const workerNames = workers.length > 0 ? workers.map(w => w.nickname || w.username).join(', ') : '-';
   sendDiscordWebhook('job_progress', {
     id: job.id,
-    action_label: newStatus === 'both_done_pending_review' ? '양측 완료 확인 (최종 정산 대기)' : `${job.employer_id === req.user.id ? '고용주' : '구직자'} 완료 확인`,
+    job_id: job.id,
+    action_label: newStatus === 'both_done_pending_review' ? '양측 완료 확인 (최종 정산 대기)' : `${isEmployer ? '고용주' : '구직자'} 완료 확인`,
+    stage_label: newStatus === 'both_done_pending_review' ? '양측 완료 확인 (최종 정산 대기)' : `${isEmployer ? '고용주' : '구직자'} 완료 확인`,
     work_type: job.work_type === '기타' && job.custom_work_type ? job.custom_work_type : job.work_type,
     employer_name: employer ? (employer.nickname || employer.username) : `#${job.employer_id}`,
-    worker_name: worker ? (worker.nickname || worker.username) : '-',
+    worker_name: workerNames,
+    actor_name: `${req.user.nickname || req.user.username} (@${req.user.username})`,
     pay_credit: job.pay_credit,
     federation_points: job.federation_points,
-    status_label: newStatus === 'both_done_pending_review' ? '양측 완료 · 관리자 정산 대기' : '상대방 완료 확인 대기'
+    status_label: newStatus === 'both_done_pending_review' ? '양측 완료 · 관리자 정산 대기' : '상대방/나머지 구직자 완료 확인 대기'
   });
 
   res.json({
     message: newStatus === 'both_done_pending_review'
-      ? '양측 모두 완료를 확인했습니다. 기업 관리자의 최종 지급 검토 요청으로 전환되었습니다.'
-      : '완료 상태가 저장되었습니다. 상대방의 완료 확인을 기다립니다.'
+      ? '고용주와 구직자 모두 완료를 확인했습니다. 기업 관리자의 최종 지급 검토 요청으로 전환되었습니다.'
+      : '완료 상태가 저장되었습니다. 상대방(또는 나머지 구직자)의 완료 확인을 기다립니다.'
   });
 });
 
 app.put('/api/jobs/:id', authenticateToken, requireRole(['사업가', '기업 관리']), (req, res) => {
-  const { work_type, custom_work_type, description, pay_credit, federation_points, work_date, duration_text, notes, status } = req.body;
+  const { work_type, custom_work_type, description, pay_credit, federation_points, max_workers, work_date, duration_text, notes, status } = req.body;
   const job = db.prepare('SELECT * FROM part_time_jobs WHERE id = ?').get(req.params.id);
   if (!job) return res.status(404).json({ error: '알바 공고를 찾을 수 없습니다.' });
 
@@ -2125,10 +2281,19 @@ app.put('/api/jobs/:id', authenticateToken, requireRole(['사업가', '기업 �
     return res.status(403).json({ error: '본인이 등록한 공고 또는 기업 관리자만 수정할 수 있습니다.' });
   }
 
+  const workers = parseJobWorkers(job);
+  const nextMaxWorkers = max_workers !== undefined ? Math.max(1, Math.floor(Number(max_workers) || 1)) : Math.max(1, Number(job.max_workers) || 1);
+  let nextStatus = canManageCorp && status ? status : job.status;
+  if (nextStatus === 'in_progress' && workers.length < nextMaxWorkers) {
+    nextStatus = 'open';
+  } else if (nextStatus === 'open' && workers.length >= nextMaxWorkers) {
+    nextStatus = 'in_progress';
+  }
+
   db.prepare(`
     UPDATE part_time_jobs
     SET work_type = ?, custom_work_type = ?, description = ?, pay_credit = ?,
-        federation_points = ?, work_date = ?, duration_text = ?, notes = ?, status = ?
+        federation_points = ?, max_workers = ?, work_date = ?, duration_text = ?, notes = ?, status = ?
     WHERE id = ?
   `).run(
     work_type ?? job.work_type,
@@ -2136,14 +2301,15 @@ app.put('/api/jobs/:id', authenticateToken, requireRole(['사업가', '기업 �
     description ?? job.description,
     pay_credit !== undefined ? Number(pay_credit) : job.pay_credit,
     canManageCorp && federation_points !== undefined ? Number(federation_points) : job.federation_points,
+    nextMaxWorkers,
     work_date ?? job.work_date,
     duration_text ?? job.duration_text,
     notes ?? job.notes,
-    canManageCorp && status ? status : job.status,
+    nextStatus,
     req.params.id
   );
 
-  res.json({ message: '단기 알바 공고 및 보수/포인트 수치가 수정되었습니다.' });
+  res.json({ message: '단기 알바 공고 및 모집 인원/보수 수치가 수정되었습니다.' });
 });
 
 app.delete('/api/jobs/:id', authenticateToken, requireRole(['사업가', '기업 관리']), (req, res) => {
@@ -2164,6 +2330,8 @@ app.put('/api/jobs/:id/finalize', authenticateToken, requireRole('기업 관리'
   const job = db.prepare('SELECT * FROM part_time_jobs WHERE id = ?').get(req.params.id);
   if (!job) return res.status(404).json({ error: '알바를 찾을 수 없습니다.' });
 
+  const workers = parseJobWorkers(job);
+
   if (decision === 'approve') {
     const pointMult = getNumericSetting('point_multiplier', 1.0);
     const creditMult = getNumericSetting('credit_multiplier', 1.0);
@@ -2176,14 +2344,21 @@ app.put('/api/jobs/:id/finalize', authenticateToken, requireRole('기업 관리'
       ? Math.round(Number(custom_federation_points))
       : Math.round(job.federation_points * pointMult);
 
-    if (job.worker_id) {
-      const beforeWorker = db.prepare('SELECT points, credits FROM users WHERE id = ?').get(job.worker_id);
+    const activeSeason = db.prepare('SELECT id FROM seasons WHERE is_active = 1 LIMIT 1').get();
+
+    for (const w of workers) {
+      const workerUserId = Number(w.user_id);
+      if (!workerUserId) continue;
+
+      const beforeWorker = db.prepare('SELECT points, credits FROM users WHERE id = ?').get(workerUserId);
+      if (!beforeWorker) continue;
+
       db.prepare('UPDATE users SET credits = credits + ?, points = points + ? WHERE id = ?')
-        .run(finalPayCredit, finalFedPoints, job.worker_id);
+        .run(finalPayCredit, finalFedPoints, workerUserId);
 
       if (finalFedPoints !== 0) {
         recordAssetTransaction({
-          userId: job.worker_id,
+          userId: workerUserId,
           assetType: 'POINT',
           amount: finalFedPoints,
           category: '단기 알바 완수',
@@ -2191,14 +2366,14 @@ app.put('/api/jobs/:id/finalize', authenticateToken, requireRole('기업 관리'
           referenceType: 'part_time_job',
           referenceId: job.id,
           actor: req.user,
-          balanceBefore: beforeWorker?.points || 0,
-          balanceAfter: (beforeWorker?.points || 0) + finalFedPoints
+          balanceBefore: beforeWorker.points || 0,
+          balanceAfter: (beforeWorker.points || 0) + finalFedPoints
         });
       }
 
       if (finalPayCredit !== 0) {
         recordAssetTransaction({
-          userId: job.worker_id,
+          userId: workerUserId,
           assetType: 'CREDIT',
           amount: finalPayCredit,
           category: '단기 알바 보수',
@@ -2206,48 +2381,55 @@ app.put('/api/jobs/:id/finalize', authenticateToken, requireRole('기업 관리'
           referenceType: 'part_time_job',
           referenceId: job.id,
           actor: req.user,
-          balanceBefore: beforeWorker?.credits || 0,
-          balanceAfter: (beforeWorker?.credits || 0) + finalPayCredit
+          balanceBefore: beforeWorker.credits || 0,
+          balanceAfter: (beforeWorker.credits || 0) + finalPayCredit
         });
       }
 
-      const activeSeason = db.prepare('SELECT id FROM seasons WHERE is_active = 1 LIMIT 1').get();
       if (activeSeason && finalFedPoints !== 0) {
         db.prepare(`
           INSERT INTO user_season_points (season_id, user_id, points)
           VALUES (?, ?, ?)
           ON CONFLICT(season_id, user_id) DO UPDATE SET points = points + excluded.points
-        `).run(activeSeason.id, job.worker_id, finalFedPoints);
+        `).run(activeSeason.id, workerUserId, finalFedPoints);
       }
     }
 
-    db.prepare("UPDATE part_time_jobs SET status = 'completed', pay_credit = ?, federation_points = ? WHERE id = ?")
-      .run(finalPayCredit, finalFedPoints, req.params.id);
+    const updatedWorkers = workers.map(w => ({ ...w, paid: 1 }));
+    db.prepare("UPDATE part_time_jobs SET status = 'completed', pay_credit = ?, federation_points = ?, workers_json = ? WHERE id = ?")
+      .run(finalPayCredit, finalFedPoints, JSON.stringify(updatedWorkers), req.params.id);
 
     const employer = db.prepare('SELECT username, nickname FROM users WHERE id = ?').get(job.employer_id);
-    const worker = job.worker_id ? db.prepare('SELECT username, nickname FROM users WHERE id = ?').get(job.worker_id) : null;
+    const workerNames = workers.length > 0 ? workers.map(w => w.nickname || w.username).join(', ') : '-';
+    const workerUsernames = workers.length > 0 ? workers.map(w => w.username).join(', ') : '-';
     sendDiscordWebhook('job_payout', {
       id: job.id,
+      job_id: job.id,
       work_type: job.work_type === '기타' && job.custom_work_type ? job.custom_work_type : job.work_type,
       employer_name: employer ? (employer.nickname || employer.username) : `#${job.employer_id}`,
-      worker_name: worker ? (worker.nickname || worker.username) : '-',
+      worker_name: workerNames,
+      worker_username: workerUsernames,
+      worker_count: workers.length,
       pay_credit: finalPayCredit,
       federation_points: finalFedPoints,
       reviewer_name: `${req.user.nickname || req.user.username} (@${req.user.username})`
     });
 
-    res.json({ message: `최종 승인 및 포인트(+${finalFedPoints}P)/보수(+${finalPayCredit.toLocaleString()}C) 지급이 완료되었습니다.` });
+    res.json({ message: `최종 승인 및 구직자 ${workers.length}명에게 1인당 포인트(+${finalFedPoints}P)/보수(+${finalPayCredit.toLocaleString()}C) 지급이 완료되었습니다.` });
   } else {
     db.prepare("UPDATE part_time_jobs SET status = 'cancelled' WHERE id = ?").run(req.params.id);
 
     const employer = db.prepare('SELECT username, nickname FROM users WHERE id = ?').get(job.employer_id);
-    const worker = job.worker_id ? db.prepare('SELECT username, nickname FROM users WHERE id = ?').get(job.worker_id) : null;
+    const workerNames = workers.length > 0 ? workers.map(w => w.nickname || w.username).join(', ') : '-';
     sendDiscordWebhook('job_progress', {
       id: job.id,
+      job_id: job.id,
       action_label: '단기 알바 거절/취소 처리',
+      stage_label: '단기 알바 거절/취소 처리',
       work_type: job.work_type === '기타' && job.custom_work_type ? job.custom_work_type : job.work_type,
       employer_name: employer ? (employer.nickname || employer.username) : `#${job.employer_id}`,
-      worker_name: worker ? (worker.nickname || worker.username) : '-',
+      worker_name: workerNames,
+      actor_name: `${req.user.nickname || req.user.username} (@${req.user.username})`,
       pay_credit: job.pay_credit,
       federation_points: job.federation_points,
       status_label: '거절/취소됨 (cancelled)'
