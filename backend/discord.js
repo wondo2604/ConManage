@@ -83,6 +83,303 @@ export function hexToIntColor(hex, defaultColor = 0x3b82f6) {
 }
 
 /**
+ * 디스코드 웹훅 URL 정규화 (구형 도메인 및 공백 정리)
+ */
+export function normalizeWebhookUrl(rawUrl) {
+  if (!rawUrl) return '';
+  let url = String(rawUrl).trim();
+  url = url.replace(/^https?:\/\/(ptb\.|canary\.)?discordapp\.com\/api\/webhooks\//i, 'https://discord.com/api/webhooks/');
+  url = url.replace(/^https?:\/\/(ptb\.|canary\.)?discord\.com\/api\/webhooks\//i, 'https://discord.com/api/webhooks/');
+  return url;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 디스코드 웹훅 Rate-Limit(HTTP 429) 방지 큐 · 임베드 마이크로 배칭 · 재시도 & 브라우저 폴백 엔진
+// ─────────────────────────────────────────────────────────────────────────────
+const MIN_INTERVAL_MS = 500;       // 동일 웹훅 URL 최소 발송 간격 (5req/2s 리밋 여유 확보)
+const BATCH_WINDOW_MS = 180;       // 동시 다발 이벤트(원장 입출금 + 보상 알림 등)를 단일 메시지로 묶는 시간 창
+const MAX_EMBEDS_PER_MESSAGE = 10; // 디스코드 1회 웹훅 요청당 최대 임베드 수
+const MAX_FALLBACK_QUEUE = 40;     // 서버 공유 IP 429 차단 시 클라이언트 브라우저가 대신 전달할 큐 최대 크기
+
+const webhookBuckets = new Map();
+const pendingClientFallbacks = [];
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function getBucket(targetUrl) {
+  let bucket = webhookBuckets.get(targetUrl);
+  if (!bucket) {
+    bucket = {
+      nextAllowedAt: 0,
+      queue: [],
+      processing: false,
+      batchTimer: null
+    };
+    webhookBuckets.set(targetUrl, bucket);
+  }
+  return bucket;
+}
+
+function isCloudflareHtml429(errText = '') {
+  const sample = String(errText).slice(0, 600).toLowerCase();
+  return sample.includes('<!doctype html') || sample.includes('<html') || sample.includes('error 1015') || sample.includes('cloudflare');
+}
+
+function parseRetryAfterMs(res, errText = '') {
+  const resetAfterHeader = res.headers?.get?.('x-ratelimit-reset-after');
+  if (resetAfterHeader) {
+    const sec = parseFloat(resetAfterHeader);
+    if (!isNaN(sec) && sec > 0) return Math.ceil(sec * 1000) + 200;
+  }
+
+  const retryHeader = res.headers?.get?.('retry-after');
+  if (retryHeader) {
+    const val = parseFloat(retryHeader);
+    if (!isNaN(val) && val > 0) {
+      return (val > 500 ? Math.ceil(val) : Math.ceil(val * 1000)) + 200;
+    }
+  }
+
+  try {
+    const body = JSON.parse(errText);
+    if (typeof body?.retry_after === 'number' && body.retry_after > 0) {
+      const r = body.retry_after;
+      return (r > 500 ? Math.ceil(r) : Math.ceil(r * 1000)) + 200;
+    }
+  } catch (_) {}
+
+  return 2200;
+}
+
+export function enqueueClientWebhookFallback(targetUrl, payload, isTest = false) {
+  if (!targetUrl || !payload) return;
+  const now = Date.now();
+  // 5분 이상 지난 오래된 항목 정리
+  while (pendingClientFallbacks.length > 0 && now - pendingClientFallbacks[0].createdAt > 5 * 60 * 1000) {
+    pendingClientFallbacks.shift();
+  }
+  if (pendingClientFallbacks.length >= MAX_FALLBACK_QUEUE) {
+    pendingClientFallbacks.shift();
+  }
+  pendingClientFallbacks.push({
+    targetUrl,
+    payload,
+    isTest: Boolean(isTest),
+    createdAt: now
+  });
+}
+
+export function hasPendingWebhookFallbacks() {
+  return pendingClientFallbacks.length > 0;
+}
+
+export function drainPendingWebhookFallbacks() {
+  if (pendingClientFallbacks.length === 0) return [];
+  return pendingClientFallbacks.splice(0, pendingClientFallbacks.length);
+}
+
+/**
+ * 실제 디스코드 웹훅 HTTP POST 수행 (Rate-Limit 헤더 추적 + 429 자동 대기 재시도)
+ */
+async function deliverPayloadWithRetry(targetUrl, payload, options = {}) {
+  const isTest = Boolean(options.isTest);
+  const returnFallbackDirect = Boolean(options.returnFallbackDirect || isTest);
+  const maxAttempts = isTest ? 3 : 4;
+  const bucket = getBucket(targetUrl);
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const waitBefore = bucket.nextAllowedAt - Date.now();
+    if (waitBefore > 0) {
+      // 인터랙티브 요청에서 대기시간이 너무 길면 즉시 클라이언트 브라우저 릴레이로 위임
+      if (returnFallbackDirect && waitBefore > 4500) {
+        return {
+          success: true,
+          relayed: true,
+          fallback_webhook: { targetUrl, payload, isTest }
+        };
+      }
+      await sleep(Math.min(waitBefore, 10000));
+    }
+
+    let res;
+    try {
+      res = await fetch(targetUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'DiscordBot (https://minecraft-federation.local, 1.0)'
+        },
+        body: JSON.stringify(payload)
+      });
+    } catch (netErr) {
+      if (attempt < maxAttempts) {
+        await sleep(800 * attempt);
+        continue;
+      }
+      throw netErr;
+    }
+
+    const remainingHeader = res.headers?.get?.('x-ratelimit-remaining');
+    const resetAfterHeader = res.headers?.get?.('x-ratelimit-reset-after');
+
+    if (res.ok) {
+      if (remainingHeader !== null && remainingHeader !== undefined && Number(remainingHeader) <= 0) {
+        const resetSec = parseFloat(resetAfterHeader) || 2;
+        bucket.nextAllowedAt = Math.max(bucket.nextAllowedAt, Date.now() + Math.ceil(resetSec * 1000) + 250);
+      } else {
+        bucket.nextAllowedAt = Math.max(bucket.nextAllowedAt, Date.now() + MIN_INTERVAL_MS);
+      }
+      return { success: true };
+    }
+
+    const errText = await res.text().catch(() => '');
+
+    if (res.status === 429) {
+      const cfBlock = isCloudflareHtml429(errText);
+      const retryMs = parseRetryAfterMs(res, errText);
+      bucket.nextAllowedAt = Math.max(bucket.nextAllowedAt, Date.now() + Math.min(retryMs, 25000));
+
+      const maxWaitAllowed = isTest ? 4500 : 12000;
+      if (!cfBlock && attempt < maxAttempts && retryMs <= maxWaitAllowed) {
+        console.warn(`[Discord Webhook 429] Waiting ${retryMs}ms before retry (${attempt}/${maxAttempts})...`);
+        await sleep(retryMs);
+        continue;
+      }
+
+      // Render 등 클라우드 공유 IP의 Cloudflare 1015 차단 또는 장기 429 발생 시 클라이언트 브라우저 폴백 반환/적재
+      console.warn(`[Discord Webhook 429 Fallback] Delegating webhook delivery to client browser (cfBlock=${cfBlock}, retryMs=${retryMs}).`);
+      if (returnFallbackDirect) {
+        return {
+          success: true,
+          relayed: true,
+          status: 429,
+          fallback_webhook: { targetUrl, payload, isTest }
+        };
+      }
+      enqueueClientWebhookFallback(targetUrl, payload, false);
+      return {
+        success: true,
+        relayed: true,
+        status: 429
+      };
+    }
+
+    // 429 외의 오류 (400, 401, 404 등)
+    bucket.nextAllowedAt = Math.max(bucket.nextAllowedAt, Date.now() + MIN_INTERVAL_MS);
+    if (isTest || options.throwOnError) {
+      throw new Error(`디스코드 응답 오류 (HTTP ${res.status}): ${errText || res.statusText}`);
+    }
+    console.error(`[Discord Webhook Error] Status: ${res.status} ${errText}`);
+    return { success: false, status: res.status, error: errText || res.statusText };
+  }
+
+  return { success: false };
+}
+
+/**
+ * URL별 큐 워커: 짧은 시간(180ms) 내 발생한 동일 채널 웹훅 임베드들을 최대 10개까지 1회 요청으로 병합 발송
+ */
+async function processBucketQueue(targetUrl) {
+  const bucket = getBucket(targetUrl);
+  if (bucket.processing) return;
+  bucket.processing = true;
+
+  try {
+    while (bucket.queue.length > 0) {
+      let batch = [];
+
+      if (bucket.queue[0].isTest || bucket.queue[0].noBatch) {
+        batch.push(bucket.queue.shift());
+      } else {
+        let embedCount = 0;
+        while (bucket.queue.length > 0 && !bucket.queue[0].isTest && !bucket.queue[0].noBatch) {
+          const nextItem = bucket.queue[0];
+          const itemEmbedLen = Array.isArray(nextItem.payload?.embeds) ? nextItem.payload.embeds.length : 0;
+          if (batch.length > 0 && embedCount + itemEmbedLen > MAX_EMBEDS_PER_MESSAGE) {
+            break;
+          }
+          batch.push(bucket.queue.shift());
+          embedCount += itemEmbedLen;
+          if (embedCount >= MAX_EMBEDS_PER_MESSAGE) break;
+        }
+      }
+
+      if (batch.length === 0) continue;
+
+      let combinedPayload;
+      if (batch.length === 1) {
+        combinedPayload = batch[0].payload;
+      } else {
+        // 주요 이벤트(납품/퀘스트/알바/충전/수동정산 등) 임베드가 원장(asset_payout/asset_deduct) 임베드보다 위에 오도록 정렬
+        const sorted = [...batch].sort((a, b) => (a.priority || 10) - (b.priority || 10));
+        const mentions = [...new Set(sorted.map(item => item.payload?.content).filter(Boolean))];
+        const embeds = sorted.flatMap(item => item.payload?.embeds || []).slice(0, MAX_EMBEDS_PER_MESSAGE);
+        combinedPayload = {
+          content: mentions.length > 0 ? mentions.join(' ') : undefined,
+          embeds
+        };
+      }
+
+      const first = batch[0];
+      try {
+        const result = await deliverPayloadWithRetry(targetUrl, combinedPayload, {
+          isTest: first.isTest,
+          returnFallbackDirect: first.returnFallbackDirect,
+          throwOnError: first.throwOnError
+        });
+        batch.forEach(item => item.resolve(result));
+      } catch (err) {
+        batch.forEach(item => item.reject(err));
+      }
+    }
+  } finally {
+    bucket.processing = false;
+    if (bucket.queue.length > 0) {
+      processBucketQueue(targetUrl);
+    }
+  }
+}
+
+function enqueueWebhookDelivery(targetUrl, payload, options = {}) {
+  const normalizedUrl = normalizeWebhookUrl(targetUrl);
+  const bucket = getBucket(normalizedUrl);
+  const isTest = Boolean(options.isTest);
+  const noBatch = Boolean(options.noBatch || isTest);
+  const type = options.type || 'general';
+  // 원장 자동 기록(asset_payout, asset_deduct)은 우선순위 숫자 20(하단), 주요 이벤트는 5(상단)
+  const priority = (type === 'asset_payout' || type === 'asset_deduct') ? 20 : 5;
+
+  return new Promise((resolve, reject) => {
+    bucket.queue.push({
+      payload,
+      type,
+      priority,
+      isTest,
+      noBatch,
+      returnFallbackDirect: Boolean(options.returnFallbackDirect || isTest),
+      throwOnError: Boolean(options.throwOnError || isTest),
+      resolve,
+      reject
+    });
+
+    if (noBatch) {
+      if (bucket.batchTimer) {
+        clearTimeout(bucket.batchTimer);
+        bucket.batchTimer = null;
+      }
+      processBucketQueue(normalizedUrl);
+    } else if (!bucket.processing && !bucket.batchTimer) {
+      bucket.batchTimer = setTimeout(() => {
+        bucket.batchTimer = null;
+        processBucketQueue(normalizedUrl);
+      }, BATCH_WINDOW_MS);
+    }
+  });
+}
+
+/**
  * 멘션 접두사 생성
  */
 function buildMentionContent(mentionType, customMention = '', isTest = false) {
@@ -105,7 +402,8 @@ function buildMentionContent(mentionType, customMention = '', isTest = false) {
  */
 export async function sendNoticeDiscordWebhook(noticeData, options = {}) {
   const globalUrl = getGlobalWebhookUrl();
-  const targetUrl = (noticeData.webhook_url && noticeData.webhook_url.trim()) ? noticeData.webhook_url.trim() : globalUrl;
+  const rawTargetUrl = (noticeData.webhook_url && noticeData.webhook_url.trim()) ? noticeData.webhook_url.trim() : globalUrl;
+  const targetUrl = normalizeWebhookUrl(rawTargetUrl);
 
   if (!targetUrl) {
     throw new Error('등록된 디스코드 웹훅 URL이 없습니다. 개별 웹훅 URL을 입력하거나 전역 웹훅 URL을 먼저 설정해주세요.');
@@ -134,18 +432,13 @@ export async function sendNoticeDiscordWebhook(noticeData, options = {}) {
     }]
   };
 
-  const res = await fetch(targetUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
+  return enqueueWebhookDelivery(targetUrl, payload, {
+    type: 'notice',
+    isTest,
+    noBatch: true,
+    returnFallbackDirect: true,
+    throwOnError: true
   });
-
-  if (!res.ok) {
-    const errorText = await res.text().catch(() => '');
-    throw new Error(`디스코드 웹훅 전송 실패 (상태 코드: ${res.status}): ${errorText || res.statusText}`);
-  }
-
-  return { success: true };
 }
 
 /**
@@ -588,7 +881,8 @@ export async function sendDiscordWebhook(type, data = {}, options = {}) {
 
     const overrideUrl = options.webhook_url !== undefined ? options.webhook_url : cfg.webhook_url;
     const globalUrl = getGlobalWebhookUrl();
-    const targetUrl = (overrideUrl && String(overrideUrl).trim()) ? String(overrideUrl).trim() : globalUrl;
+    const rawTargetUrl = (overrideUrl && String(overrideUrl).trim()) ? String(overrideUrl).trim() : globalUrl;
+    const targetUrl = normalizeWebhookUrl(rawTargetUrl);
 
     if (!targetUrl) {
       if (isTest) {
@@ -614,22 +908,13 @@ export async function sendDiscordWebhook(type, data = {}, options = {}) {
       embeds: [embed]
     };
 
-    const res = await fetch(targetUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+    return await enqueueWebhookDelivery(targetUrl, payload, {
+      type,
+      isTest,
+      noBatch: isTest,
+      returnFallbackDirect: isTest,
+      throwOnError: isTest
     });
-
-    if (!res.ok) {
-      const errText = await res.text().catch(() => '');
-      if (isTest) {
-        throw new Error(`디스코드 응답 오류 (HTTP ${res.status}): ${errText || res.statusText}`);
-      }
-      console.error(`[Discord Webhook Error] (${type}) Status: ${res.status} ${errText}`);
-      return { success: false, status: res.status };
-    }
-
-    return { success: true };
   } catch (err) {
     if (options.isTest) throw err;
     console.error(`[Discord Webhook Error] (${type})`, err.message);

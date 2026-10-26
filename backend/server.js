@@ -14,7 +14,8 @@ import {
 } from './db.js';
 import {
   sendDiscordWebhook, sendNoticeDiscordWebhook, getGlobalWebhookUrl,
-  getAllWebhookConfigs, sendTestEventWebhook
+  getAllWebhookConfigs, sendTestEventWebhook,
+  hasPendingWebhookFallbacks, drainPendingWebhookFallbacks
 } from './discord.js';
 import zlib from 'node:zlib';
 
@@ -51,10 +52,24 @@ const upload = multer({
 initDatabase();
 
 const app = express();
-app.use(cors());
+app.use(cors({
+  exposedHeaders: ['X-Webhook-Fallback-Pending']
+}));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use('/uploads', express.static(uploadDir));
+
+// 서버 공유 IP가 디스코드/Cloudflare 429로 제한된 경우 클라이언트 브라우저가 릴레이할 수 있도록 헤더 표시
+app.use((req, res, next) => {
+  const origJson = res.json.bind(res);
+  res.json = (body) => {
+    if (hasPendingWebhookFallbacks()) {
+      res.setHeader('X-Webhook-Fallback-Pending', '1');
+    }
+    return origJson(body);
+  };
+  next();
+});
 
 // 모든 데이터 변경 요청(POST, PUT, DELETE, PATCH) 완료 시 즉시 SQLite 디스크 동기화 (무료 서버 슬립 대비)
 app.use((req, res, next) => {
@@ -743,10 +758,11 @@ app.put('/api/notices/:category', authenticateToken, requireRole('공지 관리'
   }
 
   let webhookMessage = '';
+  let fallbackWebhooks = undefined;
   // 즉시 전송 요청이 있거나 (자동 저장이 아닌 수동 저장 시) 자동 웹훅이 활성화된 경우 디스코드 발송
   if (send_now || (!req.body.auto_save && webhook_enabled)) {
     try {
-      await sendNoticeDiscordWebhook({
+      const whRes = await sendNoticeDiscordWebhook({
         category: req.params.category,
         category_display: req.params.category === 'supply' ? '납품 공지사항' : req.params.category,
         title,
@@ -757,6 +773,9 @@ app.put('/api/notices/:category', authenticateToken, requireRole('공지 관리'
         message_template,
         author_name: req.user.nickname || req.user.username
       });
+      if (whRes?.fallback_webhook) {
+        fallbackWebhooks = [whRes.fallback_webhook];
+      }
       webhookMessage = ' (디스코드 웹훅 알림이 성공적으로 전송되었습니다.)';
     } catch (err) {
       console.error('[Notice Webhook Error]', err.message);
@@ -764,7 +783,11 @@ app.put('/api/notices/:category', authenticateToken, requireRole('공지 관리'
     }
   }
 
-  res.json({ message: `안내문이 업데이트되었습니다.${webhookMessage}`, id: noticeId });
+  res.json({
+    message: `안내문이 업데이트되었습니다.${webhookMessage}`,
+    id: noticeId,
+    fallback_webhooks: fallbackWebhooks
+  });
 });
 
 // 공지사항 웹훅 단독 테스트 발송
@@ -779,7 +802,7 @@ app.post('/api/notices/:category/test-webhook', authenticateToken, requireRole('
       message_template
     } = req.body;
 
-    await sendNoticeDiscordWebhook({
+    const whRes = await sendNoticeDiscordWebhook({
       category: req.params.category,
       category_display: req.params.category === 'supply' ? '납품 공지사항' : req.params.category,
       title: title || '공지사항 테스트 알림',
@@ -791,7 +814,10 @@ app.post('/api/notices/:category/test-webhook', authenticateToken, requireRole('
       author_name: req.user.nickname || req.user.username
     }, { isTest: true });
 
-    res.json({ message: '디스코드 테스트 웹훅 발송이 성공했습니다!' });
+    res.json({
+      message: '디스코드 테스트 웹훅 발송이 성공했습니다!',
+      fallback_webhooks: whRes?.fallback_webhook ? [whRes.fallback_webhook] : undefined
+    });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -3225,16 +3251,25 @@ app.post('/api/settings', authenticateToken, (req, res) => {
 
 app.post('/api/settings/test-webhook', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    await sendDiscordWebhook('schedule', {
+    const whRes = await sendDiscordWebhook('schedule', {
       title: '테스트 알림',
       description: '웹훅 연동이 정상적으로 작동합니다!',
       category: '시스템 테스트',
       start_date: new Date().toISOString().split('T')[0]
     }, { isTest: true });
-    res.json({ message: '웹훅 테스트 발송을 완료했습니다.' });
+    res.json({
+      message: '웹훅 테스트 발송을 완료했습니다.',
+      fallback_webhooks: whRes?.fallback_webhook ? [whRes.fallback_webhook] : undefined
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// 서버 공유 IP가 HTTP 429로 제한되었을 때 브라우저에서 대기 중인 웹훅을 대신 전송하기 위한 드레인 엔드포인트
+app.get('/api/webhooks/pending-fallbacks', authenticateToken, (req, res) => {
+  const items = drainPendingWebhookFallbacks();
+  res.json({ fallback_webhooks: items });
 });
 
 // --- 디스코드 웹훅 개별 이벤트 상세 설정 관리 (지급 기록 포함 26종 전체) ---
@@ -3348,7 +3383,10 @@ app.post('/api/webhooks/:eventKey/test', authenticateToken, requireAdmin, async 
     if (!result || !result.success) {
       return res.status(400).json({ error: result?.error || '웹훅 테스트 발송에 실패했습니다.' });
     }
-    res.json({ message: `[${meta.name}] 테스트 웹훅이 디스코드 채널로 발송되었습니다!` });
+    res.json({
+      message: `[${meta.name}] 테스트 웹훅이 디스코드 채널로 발송되었습니다!`,
+      fallback_webhooks: result?.fallback_webhook ? [result.fallback_webhook] : undefined
+    });
   } catch (err) {
     res.status(400).json({ error: err.message || '웹훅 테스트 발송에 실패했습니다.' });
   }
