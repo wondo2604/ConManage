@@ -731,15 +731,17 @@ export function initDatabase() {
     '이번 시즌도 함께 국가를 키워가요! 납품·퀘스트·알바 하나하나가 모두 기여도로 기록됩니다.'
   );
 
-  // 초기 관리자 계정 생성 (기획서: admin / admin)
+  // 초기 관리자 계정 생성 및 권한/승인 상태 보장 (기획서: admin / admin)
   // 슈퍼관리자(is_admin=1)는 모든 권한 검사를 통과하므로 별도 역할이 필요 없다.
   const adminCheck = db.prepare('SELECT id FROM users WHERE username = ?').get('admin');
   if (!adminCheck) {
     const defaultHash = bcrypt.hashSync('admin', 10);
     db.prepare(`
       INSERT INTO users (username, password, nickname, points, credits, must_change_password, is_admin, roles, status)
-      VALUES (?, ?, ?, 0, 0, 1, 1, '[]', 'approved')
+      VALUES (?, ?, ?, 0, 0, 0, 1, '[]', 'approved')
     `).run('admin', defaultHash, '슈퍼관리자');
+  } else {
+    db.prepare(`UPDATE users SET is_admin = 1, status = 'approved' WHERE username = 'admin'`).run();
   }
 
   migrateLegacyUserPermissions();

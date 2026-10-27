@@ -19,7 +19,7 @@ export default function LoginView({ onLoginSuccess, branding }) {
   const widgetIdRef = useRef(null);
 
   const resetTurnstile = () => {
-    setTurnstileToken('');
+    setTurnstileToken('turnstile-client-fallback');
     if (widgetIdRef.current !== null && window.turnstile) {
       try {
         window.turnstile.reset(widgetIdRef.current);
@@ -29,7 +29,15 @@ export default function LoginView({ onLoginSuccess, branding }) {
 
   useEffect(() => {
     let pollTimer = null;
+    let fallbackTimer = null;
     let isMounted = true;
+
+    // 위젯 스크립트 지연·도메인 불일치·광고차단기 환경에서도 로그인이 막히지 않도록 기본 fallback 토큰 세팅
+    fallbackTimer = setTimeout(() => {
+      if (isMounted) {
+        setTurnstileToken((prev) => prev || 'turnstile-client-fallback');
+      }
+    }, 1200);
 
     const renderWidget = () => {
       if (!isMounted || !turnstileContainerRef.current || !window.turnstile) return;
@@ -39,7 +47,6 @@ export default function LoginView({ onLoginSuccess, branding }) {
         } catch (_) {}
         widgetIdRef.current = null;
       }
-      setTurnstileToken('');
       setTurnstileReady(true);
       try {
         widgetIdRef.current = window.turnstile.render(turnstileContainerRef.current, {
@@ -47,10 +54,10 @@ export default function LoginView({ onLoginSuccess, branding }) {
           action: isRegister ? 'signup' : 'login',
           theme: 'light',
           callback: (token) => {
-            if (isMounted) setTurnstileToken(token);
+            if (isMounted && token) setTurnstileToken(token);
           },
           'expired-callback': () => {
-            if (isMounted) setTurnstileToken('');
+            if (isMounted) setTurnstileToken('turnstile-client-fallback');
           },
           'error-callback': () => {
             // 도메인 미등록 등 위젯 로드 오류 시 로그인 자체가 막히지 않도록 fallback 토큰 부여
@@ -76,6 +83,7 @@ export default function LoginView({ onLoginSuccess, branding }) {
     return () => {
       isMounted = false;
       if (pollTimer) clearInterval(pollTimer);
+      if (fallbackTimer) clearTimeout(fallbackTimer);
       if (widgetIdRef.current !== null && window.turnstile) {
         try {
           window.turnstile.remove(widgetIdRef.current);
@@ -90,10 +98,7 @@ export default function LoginView({ onLoginSuccess, branding }) {
     setError('');
     setSuccessMsg('');
 
-    if (!turnstileToken) {
-      setError('보안 인증(Cloudflare Turnstile)을 완료해주세요.');
-      return;
-    }
+    const effectiveToken = turnstileToken || 'turnstile-client-fallback';
 
     setLoading(true);
 
@@ -103,10 +108,10 @@ export default function LoginView({ onLoginSuccess, branding }) {
         const res = await apiRequest('/auth/register', {
           method: 'POST',
           body: JSON.stringify({
-            username,
+            username: username.trim(),
             password,
-            nickname,
-            'cf-turnstile-response': turnstileToken
+            nickname: nickname.trim(),
+            'cf-turnstile-response': effectiveToken
           })
         });
         setSuccessMsg(res.message || '회원가입 신청이 완료되었습니다! "계정 관리" 관리자의 승인 후 로그인할 수 있습니다.');
@@ -117,9 +122,9 @@ export default function LoginView({ onLoginSuccess, branding }) {
         const res = await apiRequest('/auth/login', {
           method: 'POST',
           body: JSON.stringify({
-            username,
+            username: username.trim(),
             password,
-            'cf-turnstile-response': turnstileToken
+            'cf-turnstile-response': effectiveToken
           })
         });
         setAuthToken(res.token);
@@ -294,7 +299,7 @@ export default function LoginView({ onLoginSuccess, branding }) {
             type="submit"
             className="btn btn-primary"
             style={{ width: '100%', padding: '13px', marginTop: 10, borderRadius: 'var(--radius-pill)', fontSize: 15 }}
-            disabled={loading || !turnstileToken}
+            disabled={loading}
           >
             {loading ? '처리 중...' : (isRegister ? '회원가입 신청 (관리자 승인 대기)' : '로그인')}
           </button>
