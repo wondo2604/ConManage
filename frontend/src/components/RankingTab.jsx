@@ -176,9 +176,9 @@ export default function RankingTab({ user, refreshUser }) {
     const scopeLabels = {
       season: '현재 선택된 시즌 랭킹 포인트 초기화',
       all_seasons: '전 시즌 랭킹 포인트 전체 초기화',
-      total_points: '모든 플레이어 누적 연방 포인트 + 현재 시즌 0P 초기화',
+      total_points: '모든 플레이어 누적 국가 기여 포인트 + 현재 시즌 0P 초기화',
       credits: '모든 플레이어 보유 크레딧 0C 초기화',
-      everything: '전체 연방 포인트 + 전체 크레딧 + 전 시즌 기록 완전 초기화'
+      everything: '전체 국가 기여 포인트 + 전체 크레딧 + 전 시즌 기록 완전 초기화'
     };
 
     if (!confirm(`⚠️ [랭킹 초기화 확인]\n\n선택한 범위: ${scopeLabels[resetForm.scope]}\n\n정말로 초기화를 실행하시겠습니까? (모든 내역은 입출금 원장에 안전하게 기록됩니다)`)) {
@@ -291,7 +291,7 @@ export default function RankingTab({ user, refreshUser }) {
             )}
           </div>
           <p style={{ color: 'var(--text-muted)', fontSize: 13, marginTop: 4 }}>
-            시즌별 연방 포인트 및 크레딧 순위를 안내합니다.
+            PlanetEarth 서버 국가 기여도(포인트 P) 및 보유 크레딧(C) 시즌별 순위를 안내합니다.
           </p>
         </div>
 
@@ -776,7 +776,7 @@ export default function RankingTab({ user, refreshUser }) {
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                 <div className="form-group">
-                  <label className="form-label">전체 누적(상점 가용) 연방 포인트 (P)</label>
+                  <label className="form-label">전체 누적(상점 가용) 국가 기여 포인트 (P)</label>
                   <input
                     type="number"
                     className="input"
@@ -875,7 +875,7 @@ export default function RankingTab({ user, refreshUser }) {
                 >
                   <option value="season">1) 현재 선택된 시즌의 랭킹 점수만 0점으로 초기화 (상점 가용 포인트 유지)</option>
                   <option value="all_seasons">2) 모든 시즌의 랭킹 점수를 0점으로 초기화 (상점 가용 포인트 유지)</option>
-                  <option value="total_points">3) 전체 플레이어의 누적 연방 포인트 + 현재 시즌 점수 모두 0P 초기화</option>
+                  <option value="total_points">3) 전체 플레이어의 누적 국가 기여 포인트 + 현재 시즌 점수 모두 0P 초기화</option>
                   <option value="credits">4) 전체 플레이어의 보유 크레딧(C) 잔액만 0C로 초기화</option>
                   <option value="everything">5) [전체 리셋] 모든 시즌 점수 + 누적 포인트 + 보유 크레딧 완전 초기화</option>
                 </select>
@@ -897,7 +897,7 @@ export default function RankingTab({ user, refreshUser }) {
                     <input
                       type="text"
                       className="input"
-                      placeholder="예: 제2회 연방 시즌"
+                      placeholder="예: 제2회 PlanetEarth 국가 시즌"
                       value={resetForm.new_season_name}
                       onChange={(e) => setResetForm({ ...resetForm, new_season_name: e.target.value })}
                       required={resetForm.create_new_season}
@@ -971,7 +971,7 @@ export default function RankingTab({ user, refreshUser }) {
                     <option value="add_season_points">현재 시즌 기본 점수 일괄 증감 (+ / -)</option>
                     <option value="add_bonus_points">현재 시즌 보너스 점수 일괄 증감 (+ / -)</option>
                     <option value="multiply_season_points">현재 시즌 점수 일괄 배율 곱하기 (예: 1.5배, 0.5배)</option>
-                    <option value="add_total_points">모든 플레이어 누적 연방 포인트(상점 가용) 일괄 지급/차감</option>
+                    <option value="add_total_points">모든 플레이어 누적 국가 기여 포인트(상점 가용) 일괄 지급/차감</option>
                     <option value="add_credits">모든 플레이어 보유 크레딧(C) 일괄 지급/차감</option>
                   </select>
                 </div>
@@ -1133,7 +1133,7 @@ export default function RankingTab({ user, refreshUser }) {
                 <input
                   type="text"
                   className="input"
-                  placeholder="예: 제2회 연방 시즌"
+                  placeholder="예: 제2회 PlanetEarth 국가 시즌"
                   value={seasonForm.name}
                   onChange={(e) => setSeasonForm({ ...seasonForm, name: e.target.value })}
                   required

@@ -37,7 +37,29 @@ import {
 import RoleManager from './RoleManager';
 import WebhookManager from './WebhookManager';
 
-export default function AdminTab({ user, refreshUser, branding, refreshBranding }) {
+const DEFAULT_NAV_LABELS = {
+  supply: '물자 납품',
+  ranking: '시즌 랭킹',
+  shop: '포인트 상점',
+  gig: '단기 알바',
+  calendar: '일정 캘린더',
+  quest: '공통 퀘스트',
+  credit: '크레딧 환전',
+  admin: '슈퍼 관리자'
+};
+
+const parseNavLabels = (raw) => {
+  if (!raw) return { ...DEFAULT_NAV_LABELS };
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (parsed && typeof parsed === 'object') {
+      return { ...DEFAULT_NAV_LABELS, ...parsed };
+    }
+  } catch (_) {}
+  return { ...DEFAULT_NAV_LABELS };
+};
+
+export default function AdminTab({ user, refreshUser, branding, refreshBranding, requestedSubTab, onClearSubTabRequest }) {
   const [users, setUsers] = useState([]);
   const [allRoles, setAllRoles] = useState([]);
   const [roleRefreshKey, setRoleRefreshKey] = useState(0);
@@ -69,14 +91,20 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
   const numericTimerRef = useRef(null);
   const noticeTimerRef = useRef(null);
 
-  // 브랜딩 및 초기 로그인 화면 메시지 수정 폼
+  // 브랜딩, 사이트 이름(탭 이름), 좌측 메뉴 탭 이름 및 초기 로그인 화면 메시지 수정 폼
   const [brandingForm, setBrandingForm] = useState({
-    system_title: branding?.system_title || 'FEDERATION',
-    nation_name: branding?.nation_name || '마인크래프트 전쟁 관리',
-    server_logo_text: branding?.server_logo_text || 'M',
+    browser_tab_title: branding?.browser_tab_title || 'PlanetEarth 국가 통합 관리 플랫폼',
+    system_title: branding?.system_title || 'PLANET EARTH',
+    nation_name: branding?.nation_name || '플래닛어스 국가 관리',
+    server_logo_text: branding?.server_logo_text || '🌍',
+    login_title: branding?.login_title || 'PlanetEarth 국가 통합 플랫폼',
     login_subtitle: branding?.login_subtitle || '',
-    login_message: branding?.login_message || ''
+    login_message: branding?.login_message || '',
+    sidebar_footer_text: branding?.sidebar_footer_text || 'PlanetEarth Server · Towny & Nation',
+    webhook_footer_text: branding?.webhook_footer_text || 'PlanetEarth 국가 통합 관리 플랫폼',
+    nav_labels_json: branding?.nav_labels_json || ''
   });
+  const [navLabelsForm, setNavLabelsForm] = useState(() => parseNavLabels(branding?.nav_labels_json));
 
   // 모달 상태
   const [showAssetModal, setShowAssetModal] = useState(false);
@@ -155,7 +183,7 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
       icon: Sliders,
       badge: `x${globalNumericConfig.point_multiplier || '1.0'}`,
       badgeAlert: false,
-      desc: '서버 내 포인트·크레딧 획득 배율, 크레딧 환전 비율 및 수수료율, 랭킹 안내 문구를 정밀 제어합니다.',
+      desc: 'PlanetEarth 서버 내 포인트·크레딧 획득 배율, 크레딧 환전 비율 및 수수료율, 랭킹 안내 문구를 정밀 제어합니다.',
       visible: user.is_admin || canManageRanking
     },
     {
@@ -165,7 +193,7 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
       icon: FileSpreadsheet,
       badge: `${transactions.length}건`,
       badgeAlert: false,
-      desc: '연방 포인트 및 크레딧의 모든 입출금 기록을 조회하고 수동 정산 및 CSV/XLSX 엑셀 추출을 수행합니다.',
+      desc: '국가 기여 포인트 및 크레딧의 모든 입출금 기록을 조회하고 수동 정산 및 CSV/XLSX 엑셀 추출을 수행합니다.',
       visible: canManageData
     },
     {
@@ -190,17 +218,24 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
     },
     {
       id: 'system',
-      label: '시스템 · 백업 · 브랜딩',
-      shortLabel: '시스템·백업',
+      label: '사이트 설정 · 백업 · 브랜딩',
+      shortLabel: '사이트·백업',
       icon: Database,
-      badge: 'JSON',
+      badge: '커스텀',
       badgeAlert: false,
-      desc: '국가 및 시스템 타이틀·로고 브랜딩 설정과 전체 데이터베이스(14개 테이블) JSON 백업·복원을 수행합니다.',
-      visible: user.is_admin
+      desc: '사이트 이름(브라우저 탭 이름), 국가/시스템 타이틀, 로고, 좌측 메뉴 이름 직접 설정 및 전체 DB JSON 백업·복원을 수행합니다.',
+      visible: user.is_admin || canManageNotices
     }
   ].filter(t => t.visible);
 
   const [activeSubTab, setActiveSubTab] = useState(() => availableTabs[0]?.id || 'users');
+
+  useEffect(() => {
+    if (requestedSubTab && availableTabs.some(t => t.id === requestedSubTab)) {
+      setActiveSubTab(requestedSubTab);
+      if (onClearSubTabRequest) onClearSubTabRequest();
+    }
+  }, [requestedSubTab, availableTabs.map(t => t.id).join(',')]);
 
   useEffect(() => {
     if (availableTabs.length > 0 && !availableTabs.some(t => t.id === activeSubTab)) {
@@ -297,20 +332,37 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
   useEffect(() => {
     if (branding && !brandingTimerRef.current) {
       setBrandingForm({
-        system_title: branding.system_title || 'FEDERATION',
-        nation_name: branding.nation_name || '마인크래프트 전쟁 관리',
-        server_logo_text: branding.server_logo_text || 'M',
+        browser_tab_title: branding.browser_tab_title || 'PlanetEarth 국가 통합 관리 플랫폼',
+        system_title: branding.system_title || 'PLANET EARTH',
+        nation_name: branding.nation_name || '플래닛어스 국가 관리',
+        server_logo_text: branding.server_logo_text || '🌍',
+        login_title: branding.login_title || 'PlanetEarth 국가 통합 플랫폼',
         login_subtitle: branding.login_subtitle || '',
-        login_message: branding.login_message || ''
+        login_message: branding.login_message || '',
+        sidebar_footer_text: branding.sidebar_footer_text || 'PlanetEarth Server · Towny & Nation',
+        webhook_footer_text: branding.webhook_footer_text || 'PlanetEarth 국가 통합 관리 플랫폼',
+        nav_labels_json: branding.nav_labels_json || ''
       });
+      setNavLabelsForm(parseNavLabels(branding.nav_labels_json));
     }
-  }, [branding?.system_title, branding?.nation_name, branding?.server_logo_text, branding?.login_subtitle, branding?.login_message]);
+  }, [
+    branding?.browser_tab_title,
+    branding?.system_title,
+    branding?.nation_name,
+    branding?.server_logo_text,
+    branding?.login_title,
+    branding?.login_subtitle,
+    branding?.login_message,
+    branding?.sidebar_footer_text,
+    branding?.webhook_footer_text,
+    branding?.nav_labels_json
+  ]);
 
-  // 브랜딩 · 로그인 화면 메시지 저장 - 입력 즉시 SQLite 자동 저장 지원
+  // 브랜딩 · 사이트 이름 · 로그인 화면 메시지 저장 - 입력 즉시 SQLite 자동 저장 지원
   const handleSaveBranding = async (e, customData = null, isAuto = false) => {
     if (e && e.preventDefault) e.preventDefault();
     if (!isInitialAdmin && !canManageNotices) {
-      if (!isAuto) alert('국가/시스템 브랜딩 및 로그인 화면 메시지 수정 권한이 없습니다.');
+      if (!isAuto) alert('사이트 이름/브랜딩 및 로그인 화면 메시지 수정 권한이 없습니다.');
       return;
     }
     if (!isAuto && brandingTimerRef.current) {
@@ -324,7 +376,7 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
     }
 
     try {
-      setAutoSaveStatus('⏳ 브랜딩 · 로그인 메시지 SQLite 저장 중...');
+      setAutoSaveStatus('⏳ 사이트 이름 · 브랜딩 SQLite 저장 중...');
       const res = await apiRequest('/settings/branding', {
         method: 'PUT',
         body: JSON.stringify(payload)
@@ -345,10 +397,23 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
     setBrandingForm(next);
     if (!isInitialAdmin && !canManageNotices) return;
     if (brandingTimerRef.current) clearTimeout(brandingTimerRef.current);
-    setAutoSaveStatus('⏳ 브랜딩 · 로그인 메시지 변경 감지 · 자동 저장 대기...');
+    setAutoSaveStatus('⏳ 사이트 이름 · 브랜딩 변경 감지 · 자동 저장 대기...');
     brandingTimerRef.current = setTimeout(() => {
       handleSaveBranding(null, next, true);
     }, 600);
+  };
+
+  const updateNavLabelAutoSave = (tabId, newLabel) => {
+    const nextNavLabels = { ...navLabelsForm, [tabId]: newLabel };
+    setNavLabelsForm(nextNavLabels);
+    const jsonStr = JSON.stringify(nextNavLabels);
+    updateBrandingAutoSave({ nav_labels_json: jsonStr });
+  };
+
+  const handleResetNavLabels = () => {
+    const resetLabels = { ...DEFAULT_NAV_LABELS };
+    setNavLabelsForm(resetLabels);
+    updateBrandingAutoSave({ nav_labels_json: '' });
   };
 
   // 가입 승인 / 거절
@@ -1512,14 +1577,14 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
       )}
 
       {/* ===================================================================== */}
-      {/* 탭 4: 연방 포인트/크레딧 입출금 상세 원장 */}
+      {/* 탭 4: 국가 기여 포인트/크레딧 입출금 상세 원장 */}
       {/* ===================================================================== */}
       {activeSubTab === 'ledger' && canManageData && (
         <div className="card" style={{ marginBottom: 28, border: '1px solid #a7f3d0' }}>
           <div className="card-header" style={{ flexWrap: 'wrap', gap: 10 }}>
             <div className="card-title">
               <FileSpreadsheet size={20} color="#059669" />
-              <span>연방 포인트/크레딧 입출금 상세 원장 (SQLite DB & CSV/XLSX 추출)</span>
+              <span>국가 기여 포인트/크레딧 입출금 상세 원장 (SQLite DB & CSV/XLSX 추출)</span>
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <button
@@ -1547,7 +1612,7 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
           </div>
 
           <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 14 }}>
-            내장 SQLite 데이터베이스(`asset_transactions`)에 기록된 모든 연방 포인트 및 크레딧 입금·출금·조정 내역입니다. 필터링 후 <strong>CSV</strong> 또는 <strong>XLSX(엑셀)</strong> 파일로 즉시 다운로드할 수 있습니다.
+            내장 SQLite 데이터베이스(`asset_transactions`)에 기록된 모든 국가 기여 포인트 및 크레딧 입금·출금·조정 내역입니다. 필터링 후 <strong>CSV</strong> 또는 <strong>XLSX(엑셀)</strong> 파일로 즉시 다운로드할 수 있습니다.
           </p>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1.5fr auto', gap: 10, marginBottom: 14, padding: 12, background: 'var(--bg-secondary)', borderRadius: 10 }}>
@@ -1561,7 +1626,7 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
               }}
             >
               <option value="ALL">전체 자산 (포인트 + 크레딧)</option>
-              <option value="POINT">연방 포인트 (P)</option>
+              <option value="POINT">국가 기여 포인트 (P)</option>
               <option value="CREDIT">크레딧 (C)</option>
             </select>
 
@@ -1853,25 +1918,49 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
             </div>
           </form>
 
-          {/* 초기 로그인 화면 메시지 설정 (공지 관리자 / 슈퍼관리자 공통) */}
+          {/* 사이트 이름(탭 제목) & 초기 로그인 화면 메시지 설정 (공지 관리자 / 슈퍼관리자 공통) */}
           <div style={{ marginTop: 28, paddingTop: 24, borderTop: '1px solid var(--border-color)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 15, color: 'var(--text-main)' }}>
                 <Globe size={18} color="var(--primary)" />
-                <span>초기 로그인 화면 메시지 설정</span>
+                <span>사이트 이름(브라우저 탭) & 초기 로그인 화면 메시지 설정</span>
               </div>
-              <span className="badge badge-approved">로그인 화면 실시간 반영</span>
+              <span className="badge badge-approved">실시간 자동 반영</span>
             </div>
             <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 14 }}>
-              플레이어가 처음 접속하는 로그인/회원가입 화면의 부제목(슬로건)과 안내 공지 박스를 자유롭게 설정할 수 있습니다.
+              브라우저 상단 탭에 표시되는 사이트 이름과 로그인/회원가입 화면의 메인 제목, 부제목(슬로건), 환영 공지 박스를 자유롭게 직접 설정할 수 있습니다.
             </p>
             <form onSubmit={handleSaveBranding}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                <div className="form-group">
+                  <label className="form-label">브라우저 탭에 뜨는 사이트 이름 (탭 제목 · 자동저장)</label>
+                  <input
+                    type="text"
+                    className="input"
+                    placeholder="예: PlanetEarth 국가 통합 관리 플랫폼"
+                    value={brandingForm.browser_tab_title || ''}
+                    onChange={(e) => updateBrandingAutoSave({ browser_tab_title: e.target.value })}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">로그인 화면 메인 제목 (자동저장)</label>
+                  <input
+                    type="text"
+                    className="input"
+                    placeholder="예: PlanetEarth 국가 통합 플랫폼"
+                    value={brandingForm.login_title || ''}
+                    onChange={(e) => updateBrandingAutoSave({ login_title: e.target.value })}
+                  />
+                </div>
+              </div>
+
               <div className="form-group">
                 <label className="form-label">로그인 화면 부제목 / 슬로건 (비워두면 기본 시스템 부제목 표시 · 자동저장)</label>
                 <input
                   type="text"
                   className="input"
-                  placeholder={`기본값: ${brandingForm.system_title || 'FEDERATION'} - 연방 국가전쟁 통합 관리 시스템`}
+                  placeholder={`기본값: ${brandingForm.system_title || 'PLANET EARTH'} - 마인크래프트 플래닛어스 서버 국가·경제·작전 통합 시스템`}
                   value={brandingForm.login_subtitle || ''}
                   onChange={(e) => updateBrandingAutoSave({ login_subtitle: e.target.value })}
                 />
@@ -1882,7 +1971,7 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
                 <textarea
                   className="textarea"
                   rows="3"
-                  placeholder="예: 📢 환영합니다! 신규 대원은 [새로운 플레이어 등록] 버튼을 눌러 인게임 닉네임으로 가입을 신청해 주세요.&#10;가입 신청 후 디스코드 인증 채널에 알려주시면 빠르게 승인됩니다."
+                  placeholder="예: 🌍 마인크래프트 PlanetEarth 국가 통합 관리 플랫폼에 오신 것을 환영합니다!&#10;신규 국민은 하단의 [새로운 플레이어 등록]을 눌러 인게임 닉네임으로 가입을 신청해 주세요."
                   value={brandingForm.login_message || ''}
                   onChange={(e) => updateBrandingAutoSave({ login_message: e.target.value })}
                 />
@@ -1895,11 +1984,11 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
                     className="btn btn-secondary"
                     onClick={() => updateBrandingAutoSave({ login_subtitle: '', login_message: '' })}
                   >
-                    초기화 (비우기)
+                    메시지 비우기
                   </button>
                 )}
                 <button type="submit" className="btn btn-primary">
-                  로그인 화면 메시지 저장
+                  사이트 이름 & 로그인 메시지 저장
                 </button>
               </div>
             </form>
@@ -1913,109 +2002,190 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
       {activeSubTab === 'webhooks' && user.is_admin && <WebhookManager />}
 
       {/* ===================================================================== */}
-      {/* 탭 7: 시스템 · 백업 · 브랜딩 (국가 이름 설정 + 전체 DB JSON 백업/복원) */}
+      {/* 탭 7: 사이트 설정 · 백업 · 브랜딩 (사이트/탭 이름 직접 설정 + 전체 DB JSON 백업/복원) */}
       {/* ===================================================================== */}
-      {activeSubTab === 'system' && user.is_admin && (
+      {activeSubTab === 'system' && (user.is_admin || canManageNotices) && (
         <div>
-          {/* 7-1. 국가 및 시스템 브랜딩 설정 */}
-          {isInitialAdmin ? (
-            <div className="card" style={{ border: '1px solid var(--border-color)', background: '#ffffff', marginBottom: 24, boxShadow: 'var(--shadow-sm)' }}>
-              <div className="card-header">
-                <div className="card-title">
-                  <Globe size={20} color="var(--primary)" />
-                  <span>국가 및 시스템 이름 · 초기 로그인 화면 메시지 설정 (최초 admin 전용)</span>
-                </div>
-                <span className="badge badge-approved">👑 최초 admin 권한 인증됨</span>
+          {/* 7-1. 사이트 이름 · 브라우저 탭 · 좌측 메뉴 탭 이름 · 로그인 문구 통합 설정 */}
+          <div className="card" style={{ border: '1px solid var(--border-color)', background: '#ffffff', marginBottom: 24, boxShadow: 'var(--shadow-sm)' }}>
+            <div className="card-header">
+              <div className="card-title">
+                <Globe size={20} color="var(--primary)" />
+                <span>사이트 이름(브라우저 탭) · 국가 타이틀 · 좌측 메뉴 이름 직접 설정</span>
               </div>
-              <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 16, lineHeight: 1.5 }}>
-                웹사이트 전역(사이드바, 헤더, 로그인 화면)에 노출되는 국가 이름, 시스템 타이틀, 로고 심볼 및 초기 로그인 화면의 안내 메시지를 설정할 수 있습니다.
-              </p>
+              <span className="badge badge-approved">⚡ 입력 즉시 실시간 반영 & 자동저장</span>
+            </div>
+            <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 18, lineHeight: 1.5 }}>
+              브라우저 상단 탭에 뜨는 사이트 이름(<code>document.title</code>), 좌측 상단 타이틀/국가명/로고, 왼쪽 메뉴 탭 각각의 이름, 디스코드 웹훅 하단 이름, 초기 로그인 화면 문구까지 모두 직접 설정할 수 있습니다.
+            </p>
 
-              <form onSubmit={handleSaveBranding}>
-                <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1.5fr 1fr', gap: 16 }}>
-                  <div className="form-group">
-                    <label className="form-label">시스템 이름 (영문/한글 · 자동저장)</label>
-                    <input
-                      type="text"
-                      className="input"
-                      placeholder="예: FEDERATION, ARCADIA"
-                      value={brandingForm.system_title}
-                      onChange={(e) => updateBrandingAutoSave({ system_title: e.target.value })}
-                      required
-                    />
-                  </div>
-
-                  <div className="form-group">
-                    <label className="form-label">국가 이름 (한글 · 자동저장)</label>
-                    <input
-                      type="text"
-                      className="input"
-                      placeholder="예: 마인크래프트 연방 국가, 아르카디아 제국"
-                      value={brandingForm.nation_name}
-                      onChange={(e) => updateBrandingAutoSave({ nation_name: e.target.value })}
-                      required
-                    />
-                  </div>
-
-                  <div className="form-group">
-                    <label className="form-label">서버 로고 심볼 (1~2글자 · 자동저장)</label>
-                    <input
-                      type="text"
-                      maxLength="4"
-                      className="input"
-                      placeholder="예: M, ⚔️, A"
-                      value={brandingForm.server_logo_text}
-                      onChange={(e) => updateBrandingAutoSave({ server_logo_text: e.target.value })}
-                      required
-                    />
-                  </div>
-                </div>
-
-                <div className="form-group" style={{ marginTop: 4 }}>
-                  <label className="form-label">로그인 화면 부제목 / 슬로건 (비워두면 기본 시스템 부제목 표시 · 자동저장)</label>
+            <form onSubmit={handleSaveBranding}>
+              {/* 1. 사이트 이름 및 기본 브랜딩 */}
+              <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--primary)', marginBottom: 10 }}>
+                1) 브라우저 탭 사이트 이름 & 상단/사이드바 타이틀
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1.6fr 1.2fr 1.4fr 0.8fr', gap: 14, marginBottom: 12 }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">브라우저 탭에 뜨는 사이트 이름</label>
                   <input
                     type="text"
                     className="input"
-                    placeholder={`기본값: ${brandingForm.system_title || 'FEDERATION'} - 연방 국가전쟁 통합 관리 시스템`}
-                    value={brandingForm.login_subtitle || ''}
-                    onChange={(e) => updateBrandingAutoSave({ login_subtitle: e.target.value })}
+                    placeholder="예: PlanetEarth 국가 통합 관리 플랫폼"
+                    value={brandingForm.browser_tab_title || ''}
+                    onChange={(e) => updateBrandingAutoSave({ browser_tab_title: e.target.value })}
+                  />
+                </div>
+
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">시스템 메인 타이틀 (좌측 상단)</label>
+                  <input
+                    type="text"
+                    className="input"
+                    placeholder="예: PLANET EARTH"
+                    value={brandingForm.system_title}
+                    onChange={(e) => updateBrandingAutoSave({ system_title: e.target.value })}
+                    required
+                  />
+                </div>
+
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">국가 / 소속 이름 (사이드바 부제)</label>
+                  <input
+                    type="text"
+                    className="input"
+                    placeholder="예: 플래닛어스 국가 관리"
+                    value={brandingForm.nation_name}
+                    onChange={(e) => updateBrandingAutoSave({ nation_name: e.target.value })}
+                    required
+                  />
+                </div>
+
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">로고 심볼/이모지</label>
+                  <input
+                    type="text"
+                    maxLength="4"
+                    className="input"
+                    placeholder="예: 🌍, ⚔️"
+                    value={brandingForm.server_logo_text}
+                    onChange={(e) => updateBrandingAutoSave({ server_logo_text: e.target.value })}
+                    required
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 20 }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">좌측 탭 하단 서버 정보 문구</label>
+                  <input
+                    type="text"
+                    className="input"
+                    placeholder="예: PlanetEarth Server · Towny & Nation"
+                    value={brandingForm.sidebar_footer_text || ''}
+                    onChange={(e) => updateBrandingAutoSave({ sidebar_footer_text: e.target.value })}
+                  />
+                </div>
+
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">디스코드 웹훅 하단 푸터 이름</label>
+                  <input
+                    type="text"
+                    className="input"
+                    placeholder="예: PlanetEarth 국가 통합 관리 플랫폼"
+                    value={brandingForm.webhook_footer_text || ''}
+                    onChange={(e) => updateBrandingAutoSave({ webhook_footer_text: e.target.value })}
+                  />
+                </div>
+              </div>
+
+              {/* 2. 왼쪽 메뉴 탭 이름 직접 설정 */}
+              <div style={{ padding: 16, background: 'var(--bg-secondary)', borderRadius: 12, border: '1px solid var(--border-color)', marginBottom: 20 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                  <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--text-main)' }}>
+                    2) 왼쪽 탭(사이드바 메뉴) 이름 직접 설정
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={handleResetNavLabels}
+                  >
+                    기본 메뉴 이름으로 초기화
+                  </button>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
+                  {[
+                    { id: 'supply', hint: '기본: 물자 납품' },
+                    { id: 'ranking', hint: '기본: 시즌 랭킹' },
+                    { id: 'shop', hint: '기본: 포인트 상점' },
+                    { id: 'gig', hint: '기본: 단기 알바' },
+                    { id: 'calendar', hint: '기본: 일정 캘린더' },
+                    { id: 'quest', hint: '기본: 공통 퀘스트' },
+                    { id: 'credit', hint: '기본: 크레딧 환전' },
+                    { id: 'admin', hint: '기본: 슈퍼 관리자' }
+                  ].map((item) => (
+                    <div key={item.id} className="form-group" style={{ marginBottom: 0 }}>
+                      <label className="form-label" style={{ fontSize: 11 }}>{item.hint}</label>
+                      <input
+                        type="text"
+                        className="input"
+                        value={navLabelsForm[item.id] ?? DEFAULT_NAV_LABELS[item.id]}
+                        placeholder={DEFAULT_NAV_LABELS[item.id]}
+                        onChange={(e) => updateNavLabelAutoSave(item.id, e.target.value)}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* 3. 초기 로그인 화면 제목 및 안내 문구 */}
+              <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--primary)', marginBottom: 10 }}>
+                3) 로그인/회원가입 화면 제목 및 환영 안내 문구
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.4fr', gap: 14 }}>
+                <div className="form-group">
+                  <label className="form-label">로그인 화면 메인 제목 (자동저장)</label>
+                  <input
+                    type="text"
+                    className="input"
+                    placeholder="예: PlanetEarth 국가 통합 플랫폼"
+                    value={brandingForm.login_title || ''}
+                    onChange={(e) => updateBrandingAutoSave({ login_title: e.target.value })}
                   />
                 </div>
 
                 <div className="form-group">
-                  <label className="form-label">초기 로그인 화면 안내/환영 메시지 (비워두면 메시지 박스 숨김 · 줄바꿈 지원 · 자동저장)</label>
-                  <textarea
-                    className="textarea"
-                    rows="3"
-                    placeholder="예: 📢 환영합니다! 신규 대원은 [새로운 플레이어 등록] 버튼을 눌러 인게임 닉네임으로 가입을 신청해 주세요.&#10;가입 신청 후 디스코드 인증 채널에 알려주시면 빠르게 승인됩니다."
-                    value={brandingForm.login_message || ''}
-                    onChange={(e) => updateBrandingAutoSave({ login_message: e.target.value })}
+                  <label className="form-label">로그인 화면 부제목 / 슬로건 (자동저장)</label>
+                  <input
+                    type="text"
+                    className="input"
+                    placeholder={`기본값: ${brandingForm.system_title || 'PLANET EARTH'} - 마인크래프트 플래닛어스 서버 국가·경제·작전 통합 시스템`}
+                    value={brandingForm.login_subtitle || ''}
+                    onChange={(e) => updateBrandingAutoSave({ login_subtitle: e.target.value })}
                   />
                 </div>
+              </div>
 
-                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
-                  {(brandingForm.login_subtitle || brandingForm.login_message) && (
-                    <button
-                      type="button"
-                      className="btn btn-secondary"
-                      onClick={() => updateBrandingAutoSave({ login_subtitle: '', login_message: '' })}
-                    >
-                      로그인 메시지 초기화
-                    </button>
-                  )}
-                  <button type="submit" className="btn btn-primary">
-                    국가 브랜딩 & 로그인 메시지 저장 적용
-                  </button>
-                </div>
-              </form>
-            </div>
-          ) : (
-            <div style={{ padding: '12px 16px', background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', marginBottom: 24, fontSize: 13, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span>🔒 국가 및 시스템 브랜딩(이름/로고) 변경은 보안 정책에 따라 <strong>최초 admin</strong> 계정에서만 수정할 수 있습니다.</span>
-            </div>
-          )}
+              <div className="form-group">
+                <label className="form-label">초기 로그인 화면 안내/환영 메시지 (비워두면 메시지 박스 숨김 · 줄바꿈 지원 · 자동저장)</label>
+                <textarea
+                  className="textarea"
+                  rows="3"
+                  placeholder="예: 🌍 마인크래프트 PlanetEarth 국가 통합 관리 플랫폼에 오신 것을 환영합니다!&#10;신규 국민은 하단의 [새로운 플레이어 등록]을 눌러 인게임 닉네임으로 가입을 신청해 주세요."
+                  value={brandingForm.login_message || ''}
+                  onChange={(e) => updateBrandingAutoSave({ login_message: e.target.value })}
+                />
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
+                <button type="submit" className="btn btn-primary">
+                  사이트 이름 · 메뉴 탭 · 브랜딩 설정 저장 적용
+                </button>
+              </div>
+            </form>
+          </div>
 
           {/* 7-2. 데이터베이스 백업 & 복원 (JSON) */}
+          {user.is_admin && (
           <div className="card" style={{ marginBottom: 28, border: '1px solid rgba(56, 189, 248, 0.3)' }}>
             <div className="card-header">
               <div className="card-title">
@@ -2116,8 +2286,10 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
               );
             })()}
           </div>
+          )}
 
           {/* 7-3. 데이터베이스 초기화 (리셋 센터) */}
+          {user.is_admin && (
           <div className="card" style={{ marginBottom: 28, border: '1px solid rgba(239, 68, 68, 0.35)' }}>
             <div className="card-header">
               <div className="card-title">
@@ -2177,6 +2349,7 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
               </div>
             </div>
           </div>
+          )}
         </div>
       )}
 
@@ -2274,7 +2447,7 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                 <div className="form-group">
-                  <label className="form-label">보유 연방 포인트 (P)</label>
+                  <label className="form-label">보유 국가 기여 포인트 (P)</label>
                   <input
                     type="number"
                     className="input"
@@ -2362,7 +2535,7 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
                     value={manualTxForm.asset_type}
                     onChange={(e) => setManualTxForm({ ...manualTxForm, asset_type: e.target.value })}
                   >
-                    <option value="POINT">연방 포인트 (P)</option>
+                    <option value="POINT">국가 기여 포인트 (P)</option>
                     <option value="CREDIT">크레딧 (C)</option>
                   </select>
                 </div>
@@ -2395,7 +2568,7 @@ export default function AdminTab({ user, refreshUser, branding, refreshBranding 
                 <input
                   type="text"
                   className="input"
-                  placeholder="예: 전쟁 승리 특별 포상금 지급"
+                  placeholder="예: PlanetEarth 공성전·영토 확장 승리 특별 포상금 지급"
                   value={manualTxForm.description}
                   onChange={(e) => setManualTxForm({ ...manualTxForm, description: e.target.value })}
                   required

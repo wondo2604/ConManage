@@ -154,18 +154,18 @@ export default function ShopTab({ user, refreshUser }) {
 
   const handlePurchase = async (item) => {
     if (user.points < item.price) {
-      alert('보유하신 연방 포인트가 부족합니다.');
+      alert('보유하신 국가 기여 포인트가 부족합니다.');
       return;
     }
     const unitLabel = item.unit || '개';
-    if (!confirm(`[${item.category || '일상, 전투 아이템'}] ${item.name} (단위: ${unitLabel}) 상품을 ${item.price.toLocaleString()} 연방 포인트로 구매하시겠습니까?`)) return;
+    if (!confirm(`[${item.category || '일상, 전투 아이템'}] ${item.name} (단위: ${unitLabel}) 상품을 ${item.price.toLocaleString()} 포인트로 구매하시겠습니까?`)) return;
 
     try {
       await apiRequest('/shop/purchase', {
         method: 'POST',
         body: JSON.stringify({ item_id: item.id })
       });
-      alert('구매 신청이 완료되었습니다! 샵 관리자가 인게임으로 아이템을 지급합니다.');
+      alert('구매 신청이 완료되었습니다! 샵 관리자가 PlanetEarth 인게임으로 아이템을 지급합니다.');
       loadData();
       if (refreshUser) refreshUser();
     } catch (err) {
@@ -184,7 +184,7 @@ export default function ShopTab({ user, refreshUser }) {
   };
 
   const handleCancelOrder = async (orderId) => {
-    if (!confirm('이 주문을 취소하고 사용자에게 연방 포인트와 상품 재고를 환불하시겠습니까?')) return;
+    if (!confirm('이 주문을 취소하고 사용자에게 국가 기여 포인트와 상품 재고를 환불하시겠습니까?')) return;
     try {
       const res = await apiRequest(`/shop/orders/${orderId}/cancel`, { method: 'PUT' });
       alert(res.message || '주문이 취소 및 환불되었습니다.');
@@ -300,10 +300,10 @@ export default function ShopTab({ user, refreshUser }) {
         <div>
           <h2 style={{ fontSize: 20, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 10 }}>
             <ShoppingBag color="#3b82f6" size={24} />
-            <span>연방 포인트 상점</span>
+            <span>PlanetEarth 국가 포인트 상점</span>
           </h2>
           <p style={{ color: '#94a3b8', fontSize: 13, marginTop: 4 }}>
-            기여도를 통해 획득한 연방 포인트로 카테고리별 아이템, 광물, 강화, 내부 혜택, 랭크를 구매하세요.
+            국가 기여도를 통해 획득한 포인트(P)로 PlanetEarth 서버 내 일상·전투 아이템, 광물, 강화, 내부 혜택, 랭크를 구매하세요.
           </p>
         </div>
 
@@ -320,13 +320,13 @@ export default function ShopTab({ user, refreshUser }) {
       {/* 내 보유 포인트 강조 배너 */}
       <div style={{ background: '#ffffff', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-lg)', padding: '20px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, boxShadow: 'var(--shadow-sm)', flexWrap: 'wrap', gap: 10 }}>
         <div>
-          <span style={{ fontSize: 13, color: 'var(--text-muted)', fontWeight: 600 }}>내 보유 연방 포인트</span>
+          <span style={{ fontSize: 13, color: 'var(--text-muted)', fontWeight: 600 }}>내 보유 국가 기여 포인트</span>
           <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--point-gold)', marginTop: 2 }}>
             {user.points?.toLocaleString() || 0} P
           </div>
         </div>
         <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-          * 포인트는 납품, 퀘스트, 단기 알바 완수 시 지급됩니다.
+          * 포인트는 물자 납품, 공통 퀘스트, 단기 알바 완수 시 지급됩니다.
         </span>
       </div>
 
@@ -609,7 +609,7 @@ export default function ShopTab({ user, refreshUser }) {
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                 <div className="form-group">
-                  <label className="form-label">필요 연방 포인트 (단위당)</label>
+                  <label className="form-label">필요 국가 기여 포인트 (단위당)</label>
                   <input
                     type="number"
                     min="0"

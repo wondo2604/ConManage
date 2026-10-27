@@ -66,7 +66,7 @@ export const WEBHOOK_EVENT_CATALOG = [
     event_key: 'asset_payout',
     name: '통합 포인트·크레딧 지급(+) 원장 기록',
     category: '지급 및 재화 기록',
-    description: '플레이어에게 연방 포인트(P) 또는 크레딧(C)이 지급(입금 +)될 때마다 원장 번호, 대상자, 지급량, 지급 전→후 잔액, 사유, 처리자를 전송합니다.',
+    description: '플레이어에게 국가 기여 포인트(P) 또는 크레딧(C)이 지급(입금 +)될 때마다 원장 번호, 대상자, 지급량, 지급 전→후 잔액, 사유, 처리자를 전송합니다.',
     default_enabled: 1,
     default_mention: 'none',
     default_color: '#10b981'
@@ -75,7 +75,7 @@ export const WEBHOOK_EVENT_CATALOG = [
     event_key: 'asset_deduct',
     name: '통합 포인트·크레딧 차감/사용(-) 원장 기록',
     category: '지급 및 재화 기록',
-    description: '플레이어의 연방 포인트(P) 또는 크레딧(C)이 차감·소비(출금 -)될 때마다 원장 번호, 대상자, 차감량, 잔액 변화, 사유, 처리자를 전송합니다.',
+    description: '플레이어의 국가 기여 포인트(P) 또는 크레딧(C)이 차감·소비(출금 -)될 때마다 원장 번호, 대상자, 차감량, 잔액 변화, 사유, 처리자를 전송합니다.',
     default_enabled: 1,
     default_mention: 'none',
     default_color: '#ef4444'
@@ -93,7 +93,7 @@ export const WEBHOOK_EVENT_CATALOG = [
     event_key: 'supply_reward',
     name: '물자 납품 승인 및 보상 지급 기록',
     category: '지급 및 재화 기록',
-    description: '물자 납품(지정/자율)이 승인되어 포인트·크레딧 보상이 지급되었을 때(사후 지급 수치 정정 포함) 전송합니다.',
+    description: 'PlanetEarth 국가 창고 물자 납품(지정/자율)이 승인되어 포인트·크레딧 보상이 지급되었을 때(사후 지급 수치 정정 포함) 전송합니다.',
     default_enabled: 1,
     default_mention: 'none',
     default_color: '#3b82f6'
@@ -102,7 +102,7 @@ export const WEBHOOK_EVENT_CATALOG = [
     event_key: 'quest_reward',
     name: '퀘스트 완수 승인 및 보상 지급 기록',
     category: '지급 및 재화 기록',
-    description: '공통 퀘스트 인증 제출이 승인되어 보상 포인트·크레딧이 지급되었을 때 전송합니다.',
+    description: '국가 공통 퀘스트 인증 제출이 승인되어 보상 포인트·크레딧이 지급되었을 때 전송합니다.',
     default_enabled: 1,
     default_mention: 'none',
     default_color: '#8b5cf6'
@@ -111,7 +111,7 @@ export const WEBHOOK_EVENT_CATALOG = [
     event_key: 'job_payout',
     name: '단기 알바 완료 승인 및 보수·포인트 지급 기록',
     category: '지급 및 재화 기록',
-    description: '단기 알바 작업이 최종 승인되어 근로자에게 크레딧 보수와 연방 포인트가 지급되었을 때 전송합니다.',
+    description: '단기 알바 작업이 최종 승인되어 근로자에게 크레딧 보수와 국가 기여 포인트가 지급되었을 때 전송합니다.',
     default_enabled: 1,
     default_mention: 'none',
     default_color: '#06b6d4'
@@ -120,7 +120,7 @@ export const WEBHOOK_EVENT_CATALOG = [
     event_key: 'ranking_bulk_adjust',
     name: '전체 플레이어 일괄 포인트·크레딧 지급/조정',
     category: '지급 및 재화 기록',
-    description: '랭킹 관리자가 전체 플레이어를 대상으로 포인트·보너스·크레딧을 일괄 지급하거나 조정했을 때 전송합니다.',
+    description: '랭킹 관리자가 전체 국가원을 대상으로 포인트·보너스·크레딧을 일괄 지급하거나 조정했을 때 전송합니다.',
     default_enabled: 1,
     default_mention: 'none',
     default_color: '#ec4899'
@@ -131,7 +131,7 @@ export const WEBHOOK_EVENT_CATALOG = [
     event_key: 'credit_charge_request',
     name: '크레딧 충전 신청 접수',
     category: '크레딧 충전 & 환전',
-    description: '플레이어가 인게임 송금 증빙과 함께 크레딧 충전을 신청했을 때 전송합니다.',
+    description: '플레이어가 PlanetEarth 인게임 송금 증빙과 함께 크레딧 충전을 신청했을 때 전송합니다.',
     default_enabled: 1,
     default_mention: 'none',
     default_color: '#38bdf8'
@@ -149,7 +149,7 @@ export const WEBHOOK_EVENT_CATALOG = [
     event_key: 'credit_exchange_request',
     name: '크레딧 환전(출금) 신청 접수',
     category: '크레딧 충전 & 환전',
-    description: '플레이어가 보유 크레딧을 인게임 화폐로 환전(출금) 신청했을 때 전송합니다.',
+    description: '플레이어가 보유 크레딧을 PlanetEarth 인게임 화폐로 환전(출금) 신청했을 때 전송합니다.',
     default_enabled: 1,
     default_mention: 'none',
     default_color: '#f97316'
@@ -158,7 +158,7 @@ export const WEBHOOK_EVENT_CATALOG = [
     event_key: 'credit_exchange_review',
     name: '크레딧 환전 지급 완료 및 반려(환불) 처리',
     category: '크레딧 충전 & 환전',
-    description: '크레딧 환전 요청이 지급 완료 처리되거나 거절(크레딧 환불)되었을 때 전송합니다.',
+    description: '크레딧 환전 요청이 인게임 지급 완료 처리되거나 거절(크레딧 환불)되었을 때 전송합니다.',
     default_enabled: 1,
     default_mention: 'none',
     default_color: '#14b8a6'
@@ -187,7 +187,7 @@ export const WEBHOOK_EVENT_CATALOG = [
     event_key: 'supply_item_created',
     name: '신규 납품 대상 품목 등록',
     category: '물자 납품 & 상점',
-    description: '납품 관리자가 새로운 납품 물자 품목과 단가(포인트/크레딧)를 등록했을 때 전송합니다.',
+    description: '납품 관리자가 새로운 국가 납품 물자 품목과 단가(포인트/크레딧)를 등록했을 때 전송합니다.',
     default_enabled: 1,
     default_mention: 'none',
     default_color: '#60a5fa'
@@ -196,7 +196,7 @@ export const WEBHOOK_EVENT_CATALOG = [
     event_key: 'shop_purchase',
     name: '포인트 상점 아이템 구매 신청',
     category: '물자 납품 & 상점',
-    description: '플레이어가 연방 포인트로 상점 아이템을 구매 신청했을 때 전송합니다.',
+    description: '플레이어가 국가 기여 포인트로 상점 아이템을 구매 신청했을 때 전송합니다.',
     default_enabled: 1,
     default_mention: 'none',
     default_color: '#a855f7'
@@ -216,7 +216,7 @@ export const WEBHOOK_EVENT_CATALOG = [
     event_key: 'quest',
     name: '신규 공통 퀘스트 등록',
     category: '퀘스트 & 단기 알바',
-    description: '새로운 공통 퀘스트가 등록되었을 때 목표 품목과 보상 정보를 전송합니다.',
+    description: '새로운 국가 공통 퀘스트가 등록되었을 때 목표 품목과 보상 정보를 전송합니다.',
     default_enabled: 1,
     default_mention: 'none',
     default_color: '#f59e0b'
@@ -272,7 +272,7 @@ export const WEBHOOK_EVENT_CATALOG = [
     event_key: 'schedule',
     name: '캘린더 신규 일정 등록',
     category: '일정 · 시즌 · 계정 관리',
-    description: '캘린더에 새로운 국가 일정이 등록되었을 때 전송합니다.',
+    description: '캘린더에 새로운 PlanetEarth 국가 일정(공성전, 국가 회의, 외교, 건축 등)이 등록되었을 때 전송합니다.',
     default_enabled: 1,
     default_mention: 'everyone',
     default_color: '#10b981'
@@ -661,36 +661,51 @@ export function initDatabase() {
     try { db.exec(`PRAGMA foreign_keys = ON;`); } catch (_) {}
   }
 
-  // 기본 랭킹 티어 초기화
+  // 기본 랭킹 티어 초기화 (PlanetEarth 국가 티어)
   const tierCheck = db.prepare("SELECT COUNT(*) as cnt FROM ranking_tiers").get();
   if (!tierCheck || tierCheck.cnt === 0) {
     const defaultTiers = [
-      { name: '연방 최고사령관 (S+)', min_points: 5000, badge_color: '#e11d48', icon_emoji: '👑', perk_description: '연방 최고 명예 칭호 및 시즌 특별 보상 1순위', sort_order: 1 },
-      { name: '연방 대장군 (S)', min_points: 2500, badge_color: '#d97706', icon_emoji: '💎', perk_description: '고급 전략 물자 우선 보급 및 명예 훈장', sort_order: 2 },
-      { name: '상급 지휘관 (A)', min_points: 1200, badge_color: '#7c3aed', icon_emoji: '🦅', perk_description: '연방 정예 작전 참여 및 보너스 배율 우대', sort_order: 3 },
-      { name: '정예 기사 (B)', min_points: 500, badge_color: '#2563eb', icon_emoji: '⚔️', perk_description: '정식 기사단 자격 및 포인트 상점 우대', sort_order: 4 },
-      { name: '연방 정규군 (C)', min_points: 100, badge_color: '#059669', icon_emoji: '🛡️', perk_description: '연방 정규 시민권 및 기본 작전 참여', sort_order: 5 },
-      { name: '신병 훈련생 (D)', min_points: 0, badge_color: '#64748b', icon_emoji: '🌱', perk_description: '납품과 퀘스트를 통해 기여도를 쌓아 진급하세요!', sort_order: 6 }
+      { name: '국가 최고 지도자 (S+)', min_points: 5000, badge_color: '#e11d48', icon_emoji: '👑', perk_description: 'PlanetEarth 국가 최고 명예 칭호 및 시즌 특별 보상 1순위', sort_order: 1 },
+      { name: '대륙 총사령관 (S)', min_points: 2500, badge_color: '#d97706', icon_emoji: '💎', perk_description: '고급 전략 물자 우선 보급 및 국가 명예 훈장', sort_order: 2 },
+      { name: '고위 집정관 (A)', min_points: 1200, badge_color: '#7c3aed', icon_emoji: '🦅', perk_description: '국가 핵심 작전 참여 및 보너스 배율 우대', sort_order: 3 },
+      { name: '정예 기사단 (B)', min_points: 500, badge_color: '#2563eb', icon_emoji: '⚔️', perk_description: '정식 기사단 자격 및 포인트 상점 우대', sort_order: 4 },
+      { name: '정규 시민 (C)', min_points: 100, badge_color: '#059669', icon_emoji: '🛡️', perk_description: '국가 정규 시민권 및 기본 작전 참여', sort_order: 5 },
+      { name: '신규 정착민 (D)', min_points: 0, badge_color: '#64748b', icon_emoji: '🌱', perk_description: '물자 납품과 퀘스트, 알바를 통해 국가 기여도를 쌓아 진급하세요!', sort_order: 6 }
     ];
     const insertTier = db.prepare(`INSERT INTO ranking_tiers (name, min_points, badge_color, icon_emoji, perk_description, sort_order) VALUES (?, ?, ?, ?, ?, ?)`);
     for (const t of defaultTiers) {
       insertTier.run(t.name, t.min_points, t.badge_color, t.icon_emoji, t.perk_description, t.sort_order);
     }
+  } else {
+    // 기존 기본값(연방 최고사령관 등)이 그대로 남아있다면 PlanetEarth 톤으로 자동 마이그레이션
+    try {
+      db.prepare(`UPDATE ranking_tiers SET name = '국가 최고 지도자 (S+)', perk_description = 'PlanetEarth 국가 최고 명예 칭호 및 시즌 특별 보상 1순위' WHERE name = '연방 최고사령관 (S+)'`).run();
+      db.prepare(`UPDATE ranking_tiers SET name = '대륙 총사령관 (S)', perk_description = '고급 전략 물자 우선 보급 및 국가 명예 훈장' WHERE name = '연방 대장군 (S)'`).run();
+      db.prepare(`UPDATE ranking_tiers SET name = '고위 집정관 (A)', perk_description = '국가 핵심 작전 참여 및 보너스 배율 우대' WHERE name = '상급 지휘관 (A)'`).run();
+      db.prepare(`UPDATE ranking_tiers SET name = '정예 기사단 (B)' WHERE name = '정예 기사 (B)'`).run();
+      db.prepare(`UPDATE ranking_tiers SET name = '정규 시민 (C)', perk_description = '국가 정규 시민권 및 기본 작전 참여' WHERE name = '연방 정규군 (C)'`).run();
+      db.prepare(`UPDATE ranking_tiers SET name = '신규 정착민 (D)', perk_description = '물자 납품과 퀘스트, 알바를 통해 국가 기여도를 쌓아 진급하세요!' WHERE name = '신병 훈련생 (D)'`).run();
+    } catch (_) {}
   }
 
-  // 기본 브랜딩 및 수치 설정 초기화
+  // 기본 브랜딩 및 수치 설정 초기화 (PlanetEarth 서버 맞춤형 기본값)
   const defaultSettings = {
-    system_title: 'FEDERATION',
-    nation_name: '마인크래프트 전쟁 관리',
-    server_logo_text: 'M',
-    login_subtitle: '',
-    login_message: '',
+    browser_tab_title: 'PlanetEarth 국가 통합 관리 플랫폼',
+    system_title: 'PLANET EARTH',
+    nation_name: '플래닛어스 국가 관리',
+    server_logo_text: '🌍',
+    login_title: 'PlanetEarth 국가 통합 플랫폼',
+    login_subtitle: 'PLANET EARTH - 마인크래프트 플래닛어스 서버 국가·경제·작전 통합 시스템',
+    login_message: '🌍 마인크래프트 PlanetEarth 국가 통합 관리 플랫폼에 오신 것을 환영합니다!\n신규 국민은 하단의 [새로운 플레이어 등록]을 눌러 인게임 닉네임으로 가입을 신청해 주세요.',
+    sidebar_footer_text: 'PlanetEarth Server · Towny & Nation',
+    webhook_footer_text: 'PlanetEarth 국가 통합 관리 플랫폼',
+    nav_labels_json: '',
     point_multiplier: '1.0',
     credit_multiplier: '1.0',
     exchange_rate: '1.0',
     min_exchange_amount: '100',
     exchange_fee_percent: '0',
-    ranking_board_notice: '이번 시즌도 함께 국가를 키워가요! 납품·퀘스트·알바 하나하나가 모두 기여도로 기록됩니다.',
+    ranking_board_notice: '🌍 PlanetEarth 서버에서 우리 국가를 함께 성장시켜요! 물자 납품·공통 퀘스트·단기 알바 하나하나가 모두 국가 기여도(P)와 크레딧(C)으로 기록됩니다.',
     ranking_show_credit_tab: '1',
     ranking_top_limit: '100',
     allow_custom_supply: '1',
@@ -702,10 +717,18 @@ export function initDatabase() {
     upsertSetting.run(k, v);
   }
 
-  // 예전 '추월/경쟁' 톤의 기본 랭킹 공지를 그대로 쓰고 있다면 새 기본 문구로 교체
-  db.prepare(`UPDATE settings SET value = ? WHERE key = 'ranking_board_notice' AND value = ?`).run(
+  // 기존 초기 기본값(FEDERATION / 마인크래프트 전쟁 관리 / M 등)이 그대로 남아있다면 PlanetEarth 기본값으로 업그레이드
+  db.prepare(`UPDATE settings SET value = ? WHERE key = 'system_title' AND value = 'FEDERATION'`).run(defaultSettings.system_title);
+  db.prepare(`UPDATE settings SET value = ? WHERE key = 'nation_name' AND value IN ('마인크래프트 전쟁 관리', '마인크래프트 국가전쟁 관리 플랫폼')`).run(defaultSettings.nation_name);
+  db.prepare(`UPDATE settings SET value = ? WHERE key = 'server_logo_text' AND value = 'M'`).run(defaultSettings.server_logo_text);
+  db.prepare(`UPDATE settings SET value = ? WHERE key = 'login_subtitle' AND value = ''`).run(defaultSettings.login_subtitle);
+  db.prepare(`UPDATE settings SET value = ? WHERE key = 'login_message' AND value = ''`).run(defaultSettings.login_message);
+
+  // 예전 기본 랭킹 공지를 쓰고 있다면 PlanetEarth 문구로 교체
+  db.prepare(`UPDATE settings SET value = ? WHERE key = 'ranking_board_notice' AND value IN (?, ?)`).run(
     defaultSettings.ranking_board_notice,
-    '🔥 시즌 1위 달성 시 특별 칭호와 네더라이트 풀세트 보상이 지급됩니다! 지금 바로 납품과 퀘스트로 경쟁자를 추월하세요!'
+    '🔥 시즌 1위 달성 시 특별 칭호와 네더라이트 풀세트 보상이 지급됩니다! 지금 바로 납품과 퀘스트로 경쟁자를 추월하세요!',
+    '이번 시즌도 함께 국가를 키워가요! 납품·퀘스트·알바 하나하나가 모두 기여도로 기록됩니다.'
   );
 
   // 초기 관리자 계정 생성 (기획서: admin / admin)
@@ -727,8 +750,8 @@ export function initDatabase() {
     const defaultRoles = [
       // 아래에서 위 순서로 position 1..N 부여 (뒤에 있을수록 높은 서열)
       { name: '일반 시민', color: '#64748b', permissions: [] },
-      { name: '정예 대원', color: '#06b6d4', permissions: [] },
-      { name: '사업가', color: '#10b981', permissions: ['사업가'] },
+      { name: '정예 국가원', color: '#06b6d4', permissions: [] },
+      { name: '사업가 · 마을장', color: '#10b981', permissions: ['사업가'] },
       { name: '물자 보급관', color: '#3b82f6', permissions: ['납품 등록', '납품 관리', '샵 관리'] },
       { name: '퀘스트·일정 담당관', color: '#f59e0b', permissions: ['퀘스트 관리', '일정 관리', '공지 관리'] },
       { name: '경제·기업 관리관', color: '#ec4899', permissions: ['기업 관리', '크레딧 관리', '데이터 관리'] },
@@ -746,8 +769,12 @@ export function initDatabase() {
   if (!seasonCheck) {
     db.prepare(`
       INSERT INTO seasons (name, start_date, end_date, reward_description, target_points, is_active)
-      VALUES ('제1회 연방 시즌', date('now'), date('now', '+30 day'), '1위: 황금 왕관 칭호 + 100,000 C / 2위: 50,000 C / 3위: 25,000 C', 10000, 1)
+      VALUES ('PlanetEarth 제1시즌', date('now'), date('now', '+30 day'), '1위: 국가 최고 공로 칭호 + 100,000 C / 2위: 50,000 C / 3위: 25,000 C', 10000, 1)
     `).run();
+  } else {
+    try {
+      db.prepare(`UPDATE seasons SET name = 'PlanetEarth 제1시즌' WHERE name = '제1회 연방 시즌'`).run();
+    } catch (_) {}
   }
 
   // 기본 납품 안내문 공지 생성
@@ -755,8 +782,17 @@ export function initDatabase() {
   if (!noticeCheck) {
     db.prepare(`
       INSERT INTO notices (category, title, content)
-      VALUES ('supply', '납품 안내 사항', '1. 상자 위치를 정확히 기재해 주세요.\n2. 상자 내부 인벤토리가 잘 보이는 스크린샷을 첨부하세요.\n3. 목록에 없는 아이템도 [자율/직접 입력 납품 신청]으로 여러 품목과 수량을 직접 입력해 납품할 수 있습니다.')
+      VALUES ('supply', 'PlanetEarth 국가 물자 납품 안내', '1. 국가/마을 창고의 상자 위치(좌표 또는 창고 번호)를 정확히 기재해 주세요.\n2. 상자 내부 인벤토리가 잘 보이는 마인크래프트 스크린샷을 첨부하세요.\n3. 목록에 없는 아이템(건축 자재·전투 물자 등)도 [자율/직접 입력 납품 신청]으로 여러 품목과 수량을 직접 입력해 납품할 수 있습니다.')
     `).run();
+  } else {
+    try {
+      db.prepare(`
+        UPDATE notices
+        SET title = 'PlanetEarth 국가 물자 납품 안내',
+            content = '1. 국가/마을 창고의 상자 위치(좌표 또는 창고 번호)를 정확히 기재해 주세요.\n2. 상자 내부 인벤토리가 잘 보이는 마인크래프트 스크린샷을 첨부하세요.\n3. 목록에 없는 아이템(건축 자재·전투 물자 등)도 [자율/직접 입력 납품 신청]으로 여러 품목과 수량을 직접 입력해 납품할 수 있습니다.'
+        WHERE category = 'supply' AND title = '납품 안내 사항'
+      `).run();
+    } catch (_) {}
   }
 
   // 이벤트별 개별 디스코드 웹훅 기본 설정 시딩 (이미 설정된 값은 유지)

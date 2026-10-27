@@ -521,9 +521,9 @@ export default function SupplyTab({ user, refreshUser }) {
       {/* 상단 액션바 */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, flexWrap: 'wrap', gap: 12 }}>
         <div>
-          <h2 style={{ fontSize: 20, fontWeight: 700 }}>국가 물자 납품 품목</h2>
+          <h2 style={{ fontSize: 20, fontWeight: 700 }}>🌍 PlanetEarth 국가 물자 납품 품목</h2>
           <p style={{ color: 'var(--text-muted)', fontSize: 13, marginTop: 4 }}>
-            카테고리(광물 / 소모품 / 농산품)별 지정 물자를 납품하거나, 목록에 없는 아이템도 <strong>[직접 아이템·수량 입력 납품]</strong>으로 납품할 수 있습니다.
+            플래닛어스(PlanetEarth) 서버 국가 창고에 지정 물자(광물 / 소모품 / 농산품)를 납품하거나, 목록에 없는 아이템도 <strong>[직접 아이템·수량 입력 납품]</strong>으로 신청할 수 있습니다.
           </p>
         </div>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
@@ -1052,7 +1052,7 @@ export default function SupplyTab({ user, refreshUser }) {
                 <input
                   type="text"
                   className="input"
-                  placeholder="예: X: 120, Y: 64, Z: -350 연방 중앙 창고 5번 상자"
+                  placeholder="예: X: 120, Y: 64, Z: -350 국가 중앙 창고 5번 상자 (/n spawn)"
                   value={customApplyForm.chest_location}
                   onChange={(e) => setCustomApplyForm({ ...customApplyForm, chest_location: e.target.value })}
                   required
@@ -1133,7 +1133,7 @@ export default function SupplyTab({ user, refreshUser }) {
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                 <div className="form-group">
-                  <label className="form-label">지급된 연방 포인트 (변경 시 유저 잔액 자동 반영)</label>
+                  <label className="form-label">지급된 국가 기여 포인트 (변경 시 유저 잔액 자동 반영)</label>
                   <input
                     type="number"
                     className="input"
@@ -1240,7 +1240,7 @@ export default function SupplyTab({ user, refreshUser }) {
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                 <div className="form-group">
-                  <label className="form-label">연방 포인트 (단위당)</label>
+                  <label className="form-label">국가 기여 포인트 (단위당)</label>
                   <input
                     type="number"
                     className="input"

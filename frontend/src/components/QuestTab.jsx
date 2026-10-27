@@ -165,10 +165,10 @@ export default function QuestTab({ user, refreshUser }) {
         <div>
           <h2 style={{ fontSize: 20, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 10 }}>
             <Compass color="#f59e0b" size={24} />
-            <span>국가 공통 퀘스트</span>
+            <span>PlanetEarth 국가 공통 퀘스트</span>
           </h2>
           <p style={{ color: '#94a3b8', fontSize: 13, marginTop: 4 }}>
-            모든 플레이어가 공통으로 수행 가능한 연방 임무입니다. 완수 후 증빙을 제출하세요.
+            PlanetEarth 서버의 모든 국민이 공통으로 수행 가능한 국가 임무입니다. 완수 후 증빙을 제출하세요.
           </p>
         </div>
 
@@ -482,7 +482,7 @@ export default function QuestTab({ user, refreshUser }) {
                 <input
                   type="text"
                   className="input"
-                  placeholder="예: 연방 보급품 상자 1개 지급"
+                  placeholder="예: 국가 보급품 상자 1개 지급"
                   value={form.reward_text}
                   onChange={(e) => setForm({ ...form, reward_text: e.target.value })}
                 />
@@ -501,7 +501,7 @@ export default function QuestTab({ user, refreshUser }) {
                   />
                 </div>
                 <div className="form-group">
-                  <label className="form-label">5) 연방 포인트 보상</label>
+                  <label className="form-label">5) 국가 기여 포인트 보상</label>
                   <input
                     type="number"
                     min="0"

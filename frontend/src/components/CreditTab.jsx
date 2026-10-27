@@ -303,10 +303,10 @@ export default function CreditTab({ user, refreshUser }) {
         <div>
           <h2 style={{ fontSize: 20, fontWeight: 800, display: 'flex', alignItems: 'center', gap: 10 }}>
             <Coins color="#059669" size={24} />
-            <span>크레딧 충전 신청 · 인게임 화폐 환전 · 입출금 원장</span>
+            <span>PlanetEarth 크레딧 충전 · 인게임 화폐 환전 · 입출금 원장</span>
           </h2>
           <p style={{ color: 'var(--text-muted)', fontSize: 13, marginTop: 4 }}>
-            크레딧 충전 창구에서 직접 충전을 신청하거나, 보유 크레딧을 인게임 화폐('원')로 환전하고 모든 포인트/크레딧 입출금 기록을 확인하세요.
+            PlanetEarth 서버 인게임 송금 증빙으로 크레딧을 충전하거나, 보유 크레딧을 인게임 화폐로 환전하고 모든 포인트/크레딧 입출금 기록을 확인하세요.
           </p>
         </div>
 
@@ -363,7 +363,7 @@ export default function CreditTab({ user, refreshUser }) {
 
         <div className="card" style={{ marginBottom: 0, padding: '18px 22px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
-            <span style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 700 }}>내 보유 연방 포인트</span>
+            <span style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 700 }}>내 보유 국가 기여 포인트</span>
             <div style={{ fontSize: 28, fontWeight: 900, color: 'var(--point-gold)', marginTop: 4 }}>
               {(user.points || 0).toLocaleString()} <span style={{ fontSize: 15 }}>Point</span>
             </div>
@@ -774,7 +774,7 @@ export default function CreditTab({ user, refreshUser }) {
             <div className="card-header" style={{ flexWrap: 'wrap', gap: 12 }}>
               <div className="card-title">
                 <FileSpreadsheet size={20} color="var(--primary)" />
-                <span>SQLite DB 기반 연방 포인트 & 크레딧 상세 입출금 기록 ({txSummary.total_count || 0}건)</span>
+                <span>SQLite DB 기반 국가 기여 포인트 & 크레딧 상세 입출금 기록 ({txSummary.total_count || 0}건)</span>
               </div>
 
               {canManageData && (
@@ -809,7 +809,7 @@ export default function CreditTab({ user, refreshUser }) {
                 }}
               >
                 <option value="ALL">전체 재화 (포인트+크레딧)</option>
-                <option value="POINT">연방 포인트 (P) 내역만</option>
+                <option value="POINT">국가 기여 포인트 (P) 내역만</option>
                 <option value="CREDIT">크레딧 (C) 내역만</option>
               </select>
 

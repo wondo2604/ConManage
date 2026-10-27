@@ -5,6 +5,16 @@ export function getGlobalWebhookUrl() {
   return settingRow?.value || process.env.DISCORD_WEBHOOK_URL || '';
 }
 
+export function getWebhookFooterText() {
+  try {
+    const footerRow = db.prepare("SELECT value FROM settings WHERE key = 'webhook_footer_text'").get();
+    if (footerRow?.value && String(footerRow.value).trim()) return String(footerRow.value).trim();
+    const tabRow = db.prepare("SELECT value FROM settings WHERE key = 'browser_tab_title'").get();
+    if (tabRow?.value && String(tabRow.value).trim()) return String(tabRow.value).trim();
+  } catch (_) {}
+  return 'PlanetEarth 국가 통합 관리 플랫폼';
+}
+
 /**
  * 전체 이벤트별 웹훅 설정 목록 조회 (카탈로그 메타데이터 + DB 저장값 병합)
  */
@@ -427,7 +437,7 @@ export async function sendNoticeDiscordWebhook(noticeData, options = {}) {
         { name: '작성/수정자', value: noticeData.author_name || '관리자', inline: true },
         { name: '일시', value: new Date().toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' }), inline: true }
       ],
-      footer: { text: '마인크래프트 연방 관리 플랫폼' },
+      footer: { text: getWebhookFooterText() },
       timestamp: new Date().toISOString()
     }]
   };
@@ -904,7 +914,7 @@ export async function sendDiscordWebhook(type, data = {}, options = {}) {
     if (isTest) {
       embed.title = `🧪 [테스트] ${embed.title}`;
     }
-    embed.footer = { text: `마인크래프트 연방 관리 플랫폼 · [${cfg.category}] ${cfg.name}` };
+    embed.footer = { text: `${getWebhookFooterText()} · [${cfg.category}] ${cfg.name}` };
     embed.timestamp = new Date().toISOString();
 
     const payload = {
@@ -947,7 +957,7 @@ export async function sendTestEventWebhook(eventKey, overrides = {}, actorUser =
     target_username: 'steve_hero',
     worker_name: '성실한광부',
     worker_username: 'miner01',
-    employer_name: '연방상단장',
+    employer_name: '플래닛어스상단장',
     employer_username: 'merchant01',
     in_game_name: '다이아광부',
     asset_type: eventKey === 'asset_deduct' ? 'CREDIT' : 'POINT',
@@ -957,29 +967,29 @@ export async function sendTestEventWebhook(eventKey, overrides = {}, actorUser =
     balance_after: eventKey === 'asset_deduct' ? 700 : 1700,
     category: '테스트 지급/정산',
     description: '개별 웹훅 설정이 정상적으로 디스코드 채널에 연동되었는지 확인하는 테스트 메시지입니다.',
-    reason: '이벤트 포상금 수동 지급 테스트',
+    reason: 'PlanetEarth 이벤트 포상금 수동 지급 테스트',
     point_diff_text: '+500 P',
     credit_diff_text: '+10,000 C',
     after_points: 1700,
     after_credits: 35000,
     supply_name: '철 주괴 64세트',
     unit: '세트',
-    chest_location: 'X: 120, Y: 65, Z: -340 (중앙 창고 3번 상자)',
+    chest_location: 'X: 120, Y: 65, Z: -340 (국가 중앙 창고 3번 상자)',
     points_earned: 300,
     credits_earned: 5000,
     reviewer_name: actorName,
     actor_name: actorName,
-    quest_title: '전선 보급용 화약 5셋 확보 작전',
+    quest_title: 'PlanetEarth 공성전 대비 화약 5셋 확보 작전',
     target_item: '화약 5세트',
-    reward_text: '작전 성공 시 연방 포인트 및 군자금 즉시 지급',
+    reward_text: '작전 성공 시 국가 기여 포인트 및 크레딧 즉시 지급',
     point_reward: 400,
     credit_reward: 8000,
-    work_type: '광물 채굴',
+    work_type: '청크 평탄화 및 광물 채굴',
     pay_credit: 15000,
     federation_points: 250,
     work_date: new Date().toISOString().slice(0, 10),
     duration_text: '약 2시간',
-    action_label: '전체 플레이어 연방 포인트 일괄 지급',
+    action_label: '전체 국가원 포인트 일괄 지급',
     value_text: '+200 P',
     target_count: 12,
     charge_datetime: new Date().toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' }),
@@ -993,12 +1003,12 @@ export async function sendTestEventWebhook(eventKey, overrides = {}, actorUser =
     points_spent: 800,
     remaining_points: 900,
     stage_label: '구직자 채용 및 작업 착수',
-    title: '주말 국가 총력전 방어 훈련',
+    title: 'PlanetEarth 주말 공성전 방어 훈련',
     start_date: new Date().toISOString().slice(0, 10),
     start_time: '20:00',
     end_time: '22:00',
     action_title: '테스트 이벤트 발송',
-    season_name: '제1회 연방 시즌',
+    season_name: 'PlanetEarth 제1시즌',
     status_label: '가입 승인 완료',
     detail: '물자 보급관 역할 부여'
   };

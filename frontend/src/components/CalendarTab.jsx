@@ -124,10 +124,10 @@ export default function CalendarTab({ user }) {
         <div>
           <h2 style={{ fontSize: 20, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 10 }}>
             <CalendarIcon color="#10b981" size={24} />
-            <span>국가 전쟁 & 연방 캘린더</span>
+            <span>PlanetEarth 국가 작전 & 일정 캘린더</span>
           </h2>
           <p style={{ color: '#94a3b8', fontSize: 13, marginTop: 4 }}>
-            노션 스타일 캘린더로 연방 작전, 공성전, 회의 일정을 관리합니다.
+            노션 스타일 캘린더로 PlanetEarth 서버 국가 회의, 공성전, 건축·영토 확장 및 이벤트 일정을 관리합니다.
           </p>
         </div>
 

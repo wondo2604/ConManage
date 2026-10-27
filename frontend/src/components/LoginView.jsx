@@ -164,16 +164,18 @@ export default function LoginView({ onLoginSuccess, branding }) {
             boxShadow: '0 8px 18px rgba(138, 24, 24, 0.25)'
           }}>
             <span style={{ fontSize: 26, fontWeight: 800, color: '#ffffff' }}>
-              {branding?.server_logo_text || 'M'}
+              {branding?.server_logo_text || '🌍'}
             </span>
           </div>
           <h1 style={{ fontSize: 22, fontWeight: 800, letterSpacing: -0.5, color: 'var(--text-main)' }}>
-            {branding?.nation_name || '마인크래프트 국가전쟁 관리 플랫폼'}
+            {(branding?.login_title && String(branding.login_title).trim())
+              ? branding.login_title
+              : (branding?.nation_name || 'PlanetEarth 국가 통합 플랫폼')}
           </h1>
           <p style={{ color: 'var(--text-muted)', fontSize: 13, marginTop: 6, fontWeight: 500, whiteSpace: 'pre-line' }}>
             {branding?.login_subtitle && String(branding.login_subtitle).trim()
               ? branding.login_subtitle
-              : `${branding?.system_title || 'FEDERATION'} - 연방 국가전쟁 통합 관리 시스템`}
+              : `${branding?.system_title || 'PLANET EARTH'} - 마인크래프트 플래닛어스 서버 국가·경제·작전 통합 시스템`}
           </p>
         </div>
 
@@ -253,11 +255,11 @@ export default function LoginView({ onLoginSuccess, branding }) {
 
           {isRegister && (
             <div className="form-group">
-              <label className="form-label">인게임 닉네임</label>
+              <label className="form-label">인게임 닉네임 (PlanetEarth)</label>
               <input
                 type="text"
                 className="input"
-                placeholder="마인크래프트 닉네임"
+                placeholder="PlanetEarth 서버 마인크래프트 인게임 닉네임"
                 value={nickname}
                 onChange={(e) => setNickname(e.target.value)}
                 required

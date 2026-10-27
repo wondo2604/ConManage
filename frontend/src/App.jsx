@@ -23,27 +23,71 @@ import {
   LogOut,
   KeyRound,
   ShieldAlert,
-  Sparkles
+  Sparkles,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Settings
 } from 'lucide-react';
+
+export const DEFAULT_NAV_LABELS = {
+  supply: '물자 납품',
+  ranking: '시즌 랭킹',
+  shop: '포인트 상점',
+  gig: '단기 알바',
+  calendar: '일정 캘린더',
+  quest: '공통 퀘스트',
+  credit: '크레딧 환전',
+  admin: '슈퍼 관리자'
+};
 
 export default function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('supply');
+  const [adminSubTabRequest, setAdminSubTabRequest] = useState(null);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(() => {
+    try {
+      return localStorage.getItem('mc_sidebar_open') !== 'false';
+    } catch {
+      return true;
+    }
+  });
 
-  // 국가 & 시스템 브랜딩 상태
+  const toggleSidebar = () => {
+    setIsSidebarOpen(prev => {
+      const next = !prev;
+      try {
+        localStorage.setItem('mc_sidebar_open', String(next));
+      } catch (_) {}
+      return next;
+    });
+  };
+
+  // 국가 & 시스템 브랜딩 상태 (PlanetEarth 기본값)
   const [branding, setBranding] = useState({
-    system_title: 'FEDERATION',
-    nation_name: '마인크래프트 전쟁 관리',
-    server_logo_text: 'M',
-    login_subtitle: '',
-    login_message: '',
+    browser_tab_title: 'PlanetEarth 국가 통합 관리 플랫폼',
+    system_title: 'PLANET EARTH',
+    nation_name: '플래닛어스 국가 관리',
+    server_logo_text: '🌍',
+    login_title: 'PlanetEarth 국가 통합 플랫폼',
+    login_subtitle: 'PLANET EARTH - 마인크래프트 플래닛어스 서버 국가·경제·작전 통합 시스템',
+    login_message: '🌍 마인크래프트 PlanetEarth 국가 통합 관리 플랫폼에 오신 것을 환영합니다!\n신규 국민은 하단의 [새로운 플레이어 등록]을 눌러 인게임 닉네임으로 가입을 신청해 주세요.',
+    sidebar_footer_text: 'PlanetEarth Server · Towny & Nation',
+    webhook_footer_text: 'PlanetEarth 국가 통합 관리 플랫폼',
+    nav_labels_json: '',
     db_epoch: '1',
     write_count: '0'
   });
   const autoBackupTimerRef = useRef(null);
   const autoRestoreInProgressRef = useRef(false);
+
+  // 브라우저 탭 타이틀(document.title) 실시간 동기화
+  useEffect(() => {
+    const customTabTitle = branding?.browser_tab_title && String(branding.browser_tab_title).trim();
+    const fallbackTitle = `${branding?.nation_name || '플래닛어스 국가 관리'} - ${branding?.system_title || 'PLANET EARTH'}`;
+    document.title = customTabTitle || fallbackTitle;
+  }, [branding?.browser_tab_title, branding?.nation_name, branding?.system_title]);
 
   const refreshBranding = async () => {
     try {
@@ -237,22 +281,39 @@ export default function App() {
     );
   }
 
+  let customNavLabels = {};
+  if (branding.nav_labels_json) {
+    try {
+      const parsed = JSON.parse(branding.nav_labels_json);
+      if (parsed && typeof parsed === 'object') {
+        customNavLabels = parsed;
+      }
+    } catch {
+      customNavLabels = {};
+    }
+  }
+  const getNavLabel = (id, fallback) => {
+    const val = customNavLabels[id];
+    return val && String(val).trim() ? String(val).trim() : (fallback || DEFAULT_NAV_LABELS[id] || id);
+  };
+
   const navItems = [
-    { id: 'supply', label: '물자 납품', icon: Package },
-    { id: 'ranking', label: '시즌 랭킹', icon: Trophy },
-    { id: 'shop', label: '포인트 상점', icon: ShoppingBag },
-    { id: 'gig', label: '단기 알바', icon: Briefcase },
-    { id: 'calendar', label: '일정 캘린더', icon: Calendar },
-    { id: 'quest', label: '공통 퀘스트', icon: Compass },
-    { id: 'credit', label: '크레딧 환전', icon: Coins }
+    { id: 'supply', label: getNavLabel('supply'), icon: Package },
+    { id: 'ranking', label: getNavLabel('ranking'), icon: Trophy },
+    { id: 'shop', label: getNavLabel('shop'), icon: ShoppingBag },
+    { id: 'gig', label: getNavLabel('gig'), icon: Briefcase },
+    { id: 'calendar', label: getNavLabel('calendar'), icon: Calendar },
+    { id: 'quest', label: getNavLabel('quest'), icon: Compass },
+    { id: 'credit', label: getNavLabel('credit'), icon: Coins }
   ];
 
   const canAccessAdmin = user.is_admin || ['계정 관리', '역할 관리', '데이터 관리', '랭킹 관리자', '공지 관리'].some(p => user.permissions?.includes(p));
+  const canEditBranding = user.is_admin || user.permissions?.includes('공지 관리');
 
   if (canAccessAdmin) {
     navItems.push({
       id: 'admin',
-      label: user.is_admin ? '슈퍼 관리자' : '관리자·데이터 센터',
+      label: getNavLabel('admin', user.is_admin ? '슈퍼 관리자' : '관리자·데이터 센터'),
       icon: ShieldCheck,
       isAdmin: true
     });
@@ -260,40 +321,93 @@ export default function App() {
 
   return (
     <div className="app-container">
-      {/* 좌측 사이드바 */}
-      <aside className="sidebar">
-        <div className="sidebar-header">
-          <div className="server-logo">{branding.server_logo_text || 'M'}</div>
-          <div>
-            <div className="server-title">{branding.system_title || 'FEDERATION'}</div>
-            <div className="server-subtitle">{branding.nation_name || '마인크래프트 전쟁 관리'}</div>
-          </div>
-        </div>
-
-        <nav className="nav-menu">
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            const isActive = activeTab === item.id;
-            return (
+      {/* 좌측 사이드바 (열기/닫기 토글 지원) */}
+      <aside className={`sidebar ${isSidebarOpen ? 'open' : 'closed'}`}>
+        <div className="sidebar-inner">
+          <div className="sidebar-header" style={{ justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0, flex: 1 }}>
+              <div className="server-logo" style={{ flexShrink: 0 }}>{branding.server_logo_text || '🌍'}</div>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div className="server-title" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {branding.system_title || 'PLANET EARTH'}
+                </div>
+                <div className="server-subtitle" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {branding.nation_name || '플래닛어스 국가 관리'}
+                </div>
+              </div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+              {canEditBranding && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveTab('admin');
+                    setAdminSubTabRequest('system');
+                  }}
+                  title="사이트 이름·탭 이름·로고 직접 설정"
+                  style={{
+                    background: 'rgba(255,255,255,0.06)',
+                    border: '1px solid rgba(255,255,255,0.1)',
+                    color: '#cbd5e1',
+                    width: 28,
+                    height: 28,
+                    borderRadius: 6,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <Settings size={14} />
+                </button>
+              )}
               <button
-                key={item.id}
-                onClick={() => {
-                  setActiveTab(item.id);
-                  refreshUser();
+                type="button"
+                onClick={toggleSidebar}
+                title="왼쪽 메뉴 탭 닫기"
+                style={{
+                  background: 'rgba(255,255,255,0.06)',
+                  border: '1px solid rgba(255,255,255,0.1)',
+                  color: '#cbd5e1',
+                  width: 28,
+                  height: 28,
+                  borderRadius: 6,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer'
                 }}
-                className={`nav-item ${isActive ? 'active' : ''} ${item.isAdmin ? 'admin-nav' : ''}`}
               >
-                <Icon size={18} />
-                <span>{item.label}</span>
+                <PanelLeftClose size={15} />
               </button>
-            );
-          })}
-        </nav>
+            </div>
+          </div>
 
-        {/* 사이드바 하단 정보 */}
-        <div style={{ padding: '16px 20px', borderTop: '1px solid var(--border-color)', fontSize: 12, color: 'var(--text-muted)' }}>
-          <div style={{ fontWeight: 600 }}>서버: {branding.nation_name || '마인크래프트 전쟁'}</div>
-          <div style={{ marginTop: 2 }}>v1.0.0 Production</div>
+          <nav className="nav-menu">
+            {navItems.map((item) => {
+              const Icon = item.icon;
+              const isActive = activeTab === item.id;
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => {
+                    setActiveTab(item.id);
+                    refreshUser();
+                  }}
+                  className={`nav-item ${isActive ? 'active' : ''} ${item.isAdmin ? 'admin-nav' : ''}`}
+                >
+                  <Icon size={18} />
+                  <span>{item.label}</span>
+                </button>
+              );
+            })}
+          </nav>
+
+          {/* 사이드바 하단 정보 */}
+          <div style={{ padding: '16px 20px', borderTop: '1px solid var(--border-color)', fontSize: 12, color: 'var(--text-muted)' }}>
+            <div style={{ fontWeight: 600 }}>서버: {branding.nation_name || '플래닛어스 국가 관리'}</div>
+            <div style={{ marginTop: 2 }}>{branding.sidebar_footer_text || 'PlanetEarth Server · Towny & Nation'}</div>
+          </div>
         </div>
       </aside>
 
@@ -302,6 +416,19 @@ export default function App() {
         {/* 상단 헤더 */}
         <header className="top-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <button
+              type="button"
+              onClick={toggleSidebar}
+              className="sidebar-toggle-btn"
+              title={isSidebarOpen ? '왼쪽 메뉴 탭 접기' : '왼쪽 메뉴 탭 열기'}
+            >
+              {isSidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
+            </button>
+            {!isSidebarOpen && (
+              <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--primary)', padding: '3px 8px', background: '#eff6ff', borderRadius: 6, border: '1px solid #bfdbfe' }}>
+                {branding.server_logo_text || '🌍'} {branding.system_title || 'PLANET EARTH'}
+              </span>
+            )}
             <span style={{ fontSize: 17, fontWeight: 700, color: 'var(--text-main)', letterSpacing: '-0.3px' }}>
               {navItems.find(i => i.id === activeTab)?.label}
             </span>
@@ -309,12 +436,12 @@ export default function App() {
 
           <div className="header-user-info">
             {/* 자산 뱃지 */}
-            <div className="asset-pill point" title="연방 포인트 (기여도)">
+            <div className="asset-pill point" title="국가 기여 포인트 (P)">
               <Sparkles size={14} />
               <span>{user.points?.toLocaleString() || 0} P</span>
             </div>
 
-            <div className="asset-pill credit" title="크레딧 (인게임 원 환전 가능)">
+            <div className="asset-pill credit" title="크레딧 (PlanetEarth 인게임 화폐 환전 가능)">
               <Coins size={14} />
               <span>{user.credits?.toLocaleString() || 0} C</span>
             </div>
@@ -398,6 +525,8 @@ export default function App() {
               refreshUser={refreshUser}
               branding={branding}
               refreshBranding={refreshBranding}
+              requestedSubTab={adminSubTabRequest}
+              onClearSubTabRequest={() => setAdminSubTabRequest(null)}
             />
           )}
         </main>

@@ -80,7 +80,7 @@ export default function GigTab({ user, refreshUser }) {
           method: 'POST',
           body: JSON.stringify(form)
         });
-        alert('알바 구인 등록이 신청되었습니다! 기업 관리자가 연방 포인트를 책정하면 공고가 게시됩니다.');
+        alert('알바 구인 등록이 신청되었습니다! 기업 관리자가 국가 기여 포인트를 책정하면 공고가 게시됩니다.');
       }
       setShowCreateModal(false);
       setEditingJob(null);
@@ -188,10 +188,10 @@ export default function GigTab({ user, refreshUser }) {
         <div>
           <h2 style={{ fontSize: 20, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 10 }}>
             <Briefcase color="var(--primary)" size={24} />
-            <span>단기 알바 구인 & 매칭</span>
+            <span>PlanetEarth 단기 알바 구인 & 매칭</span>
           </h2>
           <p style={{ color: 'var(--text-muted)', fontSize: 13, marginTop: 4 }}>
-            사업가는 필요한 구직자 인원 수를 설정해 구인하고, 구직자는 크레딧과 연방 포인트를 획득할 수 있습니다.
+            PlanetEarth 서버 내에서 사업가는 필요한 구직자 인원 수를 설정해 구인하고, 구직자는 크레딧(C)과 국가 기여 포인트(P)를 획득할 수 있습니다.
           </p>
         </div>
 
@@ -383,7 +383,7 @@ export default function GigTab({ user, refreshUser }) {
                         setShowApproveModal(true);
                       }}
                     >
-                      연방 포인트 책정 및 공고 승인 (기업 관리)
+                      국가 기여 포인트 책정 및 공고 승인 (기업 관리)
                     </button>
                   )}
 
@@ -557,7 +557,7 @@ export default function GigTab({ user, refreshUser }) {
                 </div>
                 {canManageCorporate && (
                   <div className="form-group">
-                    <label className="form-label">1인당 연방 포인트 (기업 관리 권한)</label>
+                    <label className="form-label">1인당 국가 기여 포인트 (기업 관리 권한)</label>
                     <input
                       type="number"
                       min="0"
@@ -622,7 +622,7 @@ export default function GigTab({ user, refreshUser }) {
         <div className="modal-overlay">
           <div className="modal-content">
             <h2 style={{ fontSize: 18, fontWeight: 700, marginBottom: 16 }}>
-              기업 관리: 연방 포인트 책정 & 승인
+              기업 관리: 국가 기여 포인트 책정 & 승인
             </h2>
             <div style={{ marginBottom: 16, background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', padding: 14, borderRadius: 'var(--radius-md)', fontSize: 13, color: 'var(--text-main)', lineHeight: 1.6 }}>
               <div><strong>유형:</strong> {targetJob.work_type === '기타' && targetJob.custom_work_type ? targetJob.custom_work_type : targetJob.work_type}</div>
@@ -634,7 +634,7 @@ export default function GigTab({ user, refreshUser }) {
             <form onSubmit={handleApproveGig}>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                 <div className="form-group">
-                  <label className="form-label">1인당 국가 기여 연방 포인트</label>
+                  <label className="form-label">1인당 국가 기여 포인트</label>
                   <input
                     type="number"
                     min="0"

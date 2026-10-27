@@ -3884,13 +3884,34 @@ app.post('/api/admin/reset', authenticateToken, requireAdmin, (req, res) => {
 
 // 국가 및 시스템 브랜딩 (공개 조회 + DB 동기화 메타데이터 포함)
 app.get('/api/settings/branding', (req, res) => {
-  const rows = db.prepare("SELECT key, value FROM settings WHERE key IN ('system_title', 'nation_name', 'server_logo_text', 'login_subtitle', 'login_message', 'db_epoch', 'write_count')").all();
+  const rows = db.prepare(`
+    SELECT key, value FROM settings
+    WHERE key IN (
+      'browser_tab_title',
+      'system_title',
+      'nation_name',
+      'server_logo_text',
+      'login_title',
+      'login_subtitle',
+      'login_message',
+      'sidebar_footer_text',
+      'webhook_footer_text',
+      'nav_labels_json',
+      'db_epoch',
+      'write_count'
+    )
+  `).all();
   const branding = {
-    system_title: 'FEDERATION',
-    nation_name: '마인크래프트 전쟁 관리',
-    server_logo_text: 'M',
-    login_subtitle: '',
-    login_message: '',
+    browser_tab_title: 'PlanetEarth 국가 통합 관리 플랫폼',
+    system_title: 'PLANET EARTH',
+    nation_name: '플래닛어스 국가 관리',
+    server_logo_text: '🌍',
+    login_title: 'PlanetEarth 국가 통합 플랫폼',
+    login_subtitle: 'PLANET EARTH - 마인크래프트 플래닛어스 서버 국가·경제·작전 통합 시스템',
+    login_message: '🌍 마인크래프트 PlanetEarth 국가 통합 관리 플랫폼에 오신 것을 환영합니다!\n신규 국민은 하단의 [새로운 플레이어 등록]을 눌러 인게임 닉네임으로 가입을 신청해 주세요.',
+    sidebar_footer_text: 'PlanetEarth Server · Towny & Nation',
+    webhook_footer_text: 'PlanetEarth 국가 통합 관리 플랫폼',
+    nav_labels_json: '',
     db_epoch: '1',
     write_count: '0'
   };
@@ -3898,34 +3919,63 @@ app.get('/api/settings/branding', (req, res) => {
   res.json(branding);
 });
 
-// 국가 및 시스템 브랜딩 · 초기 로그인 화면 메시지 수정
+// 국가 및 시스템 브랜딩 · 사이트 탭 이름 · 초기 로그인 화면 메시지 수정
 app.put('/api/settings/branding', authenticateToken, (req, res) => {
   const isSuperAdmin = req.user.is_admin === 1 || req.user.username === 'admin';
   const canManageNotice = isSuperAdmin || (Array.isArray(req.user.roleList) && req.user.roleList.includes('공지 관리'));
   if (!canManageNotice) {
-    return res.status(403).json({ error: '국가/시스템 브랜딩 및 로그인 화면 메시지 수정 권한이 없습니다.' });
+    return res.status(403).json({ error: '사이트 이름/브랜딩 및 로그인 화면 메시지 수정 권한이 없습니다.' });
   }
 
-  const { system_title, nation_name, server_logo_text, login_subtitle, login_message } = req.body || {};
+  const {
+    browser_tab_title,
+    system_title,
+    nation_name,
+    server_logo_text,
+    login_title,
+    login_subtitle,
+    login_message,
+    sidebar_footer_text,
+    webhook_footer_text,
+    nav_labels_json
+  } = req.body || {};
+
+  const upsert = db.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value");
+
   if (isSuperAdmin) {
+    if (browser_tab_title !== undefined) {
+      upsert.run('browser_tab_title', String(browser_tab_title).trim());
+    }
     if (system_title !== undefined && String(system_title).trim()) {
-      db.prepare("INSERT INTO settings (key, value) VALUES ('system_title', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(system_title).trim());
+      upsert.run('system_title', String(system_title).trim());
     }
     if (nation_name !== undefined && String(nation_name).trim()) {
-      db.prepare("INSERT INTO settings (key, value) VALUES ('nation_name', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(nation_name).trim());
+      upsert.run('nation_name', String(nation_name).trim());
     }
     if (server_logo_text !== undefined && String(server_logo_text).trim()) {
-      db.prepare("INSERT INTO settings (key, value) VALUES ('server_logo_text', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(server_logo_text).trim());
+      upsert.run('server_logo_text', String(server_logo_text).trim());
+    }
+    if (sidebar_footer_text !== undefined) {
+      upsert.run('sidebar_footer_text', String(sidebar_footer_text).trim());
+    }
+    if (webhook_footer_text !== undefined) {
+      upsert.run('webhook_footer_text', String(webhook_footer_text).trim());
+    }
+    if (nav_labels_json !== undefined) {
+      upsert.run('nav_labels_json', typeof nav_labels_json === 'string' ? nav_labels_json : JSON.stringify(nav_labels_json || {}));
     }
   }
+  if (login_title !== undefined) {
+    upsert.run('login_title', String(login_title).trim());
+  }
   if (login_subtitle !== undefined) {
-    db.prepare("INSERT INTO settings (key, value) VALUES ('login_subtitle', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(login_subtitle).trim());
+    upsert.run('login_subtitle', String(login_subtitle).trim());
   }
   if (login_message !== undefined) {
-    db.prepare("INSERT INTO settings (key, value) VALUES ('login_message', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(login_message));
+    upsert.run('login_message', String(login_message));
   }
 
-  res.json({ message: '시스템 브랜딩 및 초기 로그인 화면 메시지가 성공적으로 저장되었습니다.' });
+  res.json({ message: '사이트 이름(탭 제목) 및 시스템 브랜딩 설정이 성공적으로 저장되었습니다.' });
 });
 
 // 프론트엔드 정적 파일 서빙 지원 (배포 패키지용 public 또는 ../frontend/dist)
